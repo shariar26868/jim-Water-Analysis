@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  # Main API Service
+  water-analysis-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: water-analysis-api
+    ports:
+      - "8000:8000"
+    environment:
+      # From .env file
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - MONGO_URI=${MONGO_URI}
+      - MONGO_DB_NAME=${MONGO_DB_NAME}
+      
+      # Application config
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - APP_ENV=development
+      - LOG_LEVEL=INFO
+      
+      # PHREEQC config (auto-detected in container)
+      - PHREEQC_EXECUTABLE_PATH=/usr/bin/phreeqc
+      - PHREEQC_DATABASE_PATH=./data/phreeqc.dat
+      - PITZER_DATABASE_PATH=./data/pitzer.dat
+      
+      # Feature flags
+      - ENABLE_AI_SUGGESTIONS=true
+      - ENABLE_PROMPT_BASED_GRAPHS=true
+      
+      # Rate limiting
+      - RATE_LIMIT_OCR=10
+      - RATE_LIMIT_ANALYSIS=20
+    
+    volumes:
+      # Mount code for hot reload (development)
+      - ./:/app
+      # Persistent data
+      - ./data:/app/data
+      - ./logs:/app/logs
+    
+    env_file:
+      - .env
+    
+    networks:
+      - water-analysis-network
+    
+    restart: unless-stopped
+    
+    # Logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  water-analysis-network:
+    driver: bridge
