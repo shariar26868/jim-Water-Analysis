@@ -88,7 +88,10 @@ class PHREEQCService:
         self.phreeqc_dat = os.path.join(database_dir, default_db)
         self.pitzer_dat = os.path.join(database_dir, pitzer_db)
 
-        logger.info(f"PHREEQC mode='{mode}' -> exe='{self.phreeqc_executable}' db_dir='{database_dir}'")
+        # Configurable timeout (seconds) for PHREEQC runs
+        self.phreeqc_timeout = int(os.getenv("PHREEQC_TIMEOUT", "300"))
+
+        logger.info(f"PHREEQC mode='{mode}' -> exe='{self.phreeqc_executable}' db_dir='{database_dir}' timeout={self.phreeqc_timeout}s")
 
         self._verified = self._verify_phreeqc()
 
@@ -482,18 +485,43 @@ class PHREEQCService:
             with open(pqi_path, "w") as f:
                 f.write(pqi_content)
 
-            # Run PHREEQC
+            # Defensive: warn if database file is missing (common container misconfigure)
+            if not os.path.isfile(database):
+                logger.warning(
+                    f"PHREEQC database file not found: {database} — check PHREEQC_DATABASE_PATH or file mounts"
+                )
+
+            cmd = [self.phreeqc_executable, pqi_path, pqo_path, database]
+            logger.debug(f"Running PHREEQC command: {cmd}")
+
+            # Run PHREEQC (use configurable timeout)
+            timeout_sec = self.phreeqc_timeout if os.name != "nt" else max(self.phreeqc_timeout, 60)
             try:
                 result = subprocess.run(
-                    [self.phreeqc_executable, pqi_path, pqo_path, database],
+                    cmd,
                     capture_output=True, text=True,
-                    timeout=30 if os.name != "nt" else 60
+                    timeout=timeout_sec
                 )
-            except subprocess.TimeoutExpired:
-                raise RuntimeError("PHREEQC timed out")
+            except subprocess.TimeoutExpired as exc:
+                out = (exc.output or "")[:2000]
+                err = (exc.stderr or "")[:2000]
+                logger.error(
+                    "PHREEQC timed out", extra={
+                        "cmd": cmd, "timeout_s": timeout_sec, "stdout": out, "stderr": err
+                    }
+                )
+                # include helpful debugging info
+                snippet = pqi_content[:1500]
+                raise RuntimeError(
+                    f"PHREEQC timed out after {timeout_sec}s.\ncmd={cmd}\nstdout={out!r}\nstderr={err!r}\ninput_pqi_preview={snippet!r}"
+                ) from exc
 
             if result.returncode != 0:
-                raise RuntimeError(f"PHREEQC error: {result.stderr}")
+                logger.error(
+                    "PHREEQC process failed",
+                    extra={"rc": result.returncode, "stderr": (result.stderr or '')[:2000]}
+                )
+                raise RuntimeError(f"PHREEQC error (rc={result.returncode}): {result.stderr}")
 
             # Parse output
             with open(pqo_path, "r") as f:
@@ -511,15 +539,20 @@ class PHREEQCService:
                 f.write(pqi_content)
 
             try:
+                batch_timeout = max(self.phreeqc_timeout * 2, 120) if os.name != "nt" else max(self.phreeqc_timeout * 2, 180)
                 result = subprocess.run(
                     [self.phreeqc_executable, pqi_path, pqo_path, database],
                     capture_output=True, text=True,
-                    timeout=120 if os.name != "nt" else 180
+                    timeout=batch_timeout
                 )
-            except subprocess.TimeoutExpired:
-                raise RuntimeError("PHREEQC batch timed out")
+            except subprocess.TimeoutExpired as exc:
+                out = (exc.output or "")[:2000]
+                err = (exc.stderr or "")[:2000]
+                logger.error("PHREEQC batch timed out", extra={"timeout_s": batch_timeout, "stdout": out, "stderr": err})
+                raise RuntimeError(f"PHREEQC batch timed out after {batch_timeout}s; stderr={err!r}") from exc
 
             if result.returncode != 0:
+                logger.error("PHREEQC batch process failed", extra={"rc": result.returncode, "stderr": (result.stderr or '')[:2000]})
                 raise RuntimeError(f"PHREEQC error: {result.stderr}")
 
             with open(pqo_path, "r") as f:
