@@ -11,6 +11,7 @@ CHANGES:
 import os
 import logging
 import subprocess
+import shutil
 import tempfile
 import re
 import math
@@ -67,6 +68,12 @@ class PHREEQCService:
             exe_path = os.getenv("PHREEQC_EXECUTABLE_PATH")
             database_dir = os.getenv("PHREEQC_DATABASE_PATH")
 
+        # Normalize (strip surrounding quotes/whitespace from .env values)
+        if isinstance(exe_path, str):
+            exe_path = exe_path.strip().strip('"').strip("'")
+        if isinstance(database_dir, str):
+            database_dir = database_dir.strip().strip('"').strip("'")
+
         # Fallback defaults when env vars are not set
         if not exe_path:
             exe_path = (
@@ -86,21 +93,67 @@ class PHREEQCService:
         self._verified = self._verify_phreeqc()
 
     # ========================================
-    # VERIFY PHREEQC (Windows-safe)
+    # VERIFY PHREEQC (Windows-safe, resilient)
+    # - Accepts direct path, directory, plain basename, or common locations
+    # - Ensures file is executable (os.X_OK)
     # ========================================
     def _verify_phreeqc(self) -> bool:
         try:
-            if not os.path.isfile(self.phreeqc_executable):
-                logger.warning(f"⚠️ PHREEQC not found: {self.phreeqc_executable}")
+            candidate = self.phreeqc_executable
+            resolved = None
+
+            # 1) Direct file path that exists and is executable
+            if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                resolved = candidate
+
+            # 2) If candidate is a directory, try common binary names inside it
+            elif candidate and os.path.isdir(candidate):
+                for name in ("phreeqc", "phreeqc.exe"):
+                    p = os.path.join(candidate, name)
+                    if os.path.isfile(p) and os.access(p, os.X_OK):
+                        resolved = p
+                        break
+
+            # 3) If candidate looks like a basename (no path separator) try shutil.which()
+            elif candidate and os.path.basename(candidate) == candidate:
+                which_path = shutil.which(candidate)
+                if which_path and os.access(which_path, os.X_OK):
+                    resolved = which_path
+
+            # 4) Try a few common UNIX locations (useful inside containers)
+            if not resolved and os.name != "nt":
+                for p in ("/usr/local/bin/phreeqc", "/usr/bin/phreeqc", "/bin/phreeqc"):
+                    if os.path.isfile(p) and os.access(p, os.X_OK):
+                        resolved = p
+                        break
+
+            # 5) Last-resort: if candidate exists but not executable, log that specifically
+            if not resolved and candidate and os.path.exists(candidate):
+                logger.warning(f"PHREEQC found but not executable: {candidate}")
                 return False
+
+            if not resolved:
+                logger.warning(f"⚠️ PHREEQC not found: {candidate} (searched PATH and common locations)")
+                return False
+
+            # If we resolved to a different path, update the attribute
+            if resolved != self.phreeqc_executable:
+                logger.info(f"PHREEQC resolved: '{self.phreeqc_executable}' -> '{resolved}'")
+                self.phreeqc_executable = resolved
+
             logger.info(f"✅ PHREEQC found: {self.phreeqc_executable}")
 
-            if os.name != "nt":          # skip --version on Windows
-                result = subprocess.run(
-                    [self.phreeqc_executable, "--version"],
-                    capture_output=True, text=True, timeout=3
-                )
-                logger.info(f"   version output: {result.stdout.strip()}")
+            # Run --version on non-Windows to validate runtime
+            if os.name != "nt":
+                try:
+                    result = subprocess.run(
+                        [self.phreeqc_executable, "--version"],
+                        capture_output=True, text=True, timeout=3
+                    )
+                    logger.info(f"   version output: {result.stdout.strip()}")
+                except Exception as e:
+                    logger.warning(f"Unable to run PHREEQC --version check: {e}")
+
             return True
         except Exception as e:
             logger.error(f"❌ PHREEQC verify failed: {e}")
