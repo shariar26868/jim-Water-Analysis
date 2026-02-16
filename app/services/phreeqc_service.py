@@ -89,7 +89,7 @@ class PHREEQCService:
         self.pitzer_dat = os.path.join(database_dir, pitzer_db)
 
         # Configurable timeout (seconds) for PHREEQC runs
-        self.phreeqc_timeout = int(os.getenv("PHREEQC_TIMEOUT", "300"))
+        self.phreeqc_timeout = int(os.getenv("PHREEQC_TIMEOUT", "120"))
 
         logger.info(f"PHREEQC mode='{mode}' -> exe='{self.phreeqc_executable}' db_dir='{database_dir}' timeout={self.phreeqc_timeout}s")
 

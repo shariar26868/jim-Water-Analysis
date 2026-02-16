@@ -25,10 +25,16 @@ services:
       - APP_ENV=development
       - LOG_LEVEL=INFO
       
-      # PHREEQC config (auto-detected in container)
-      - PHREEQC_EXECUTABLE_PATH=/usr/bin/phreeqc
-      - PHREEQC_DATABASE_PATH=./data/phreeqc.dat
-      - PITZER_DATABASE_PATH=./data/pitzer.dat
+      # PHREEQC config (env-driven; supports MODE=test or MODE=vps)
+      - MODE=${MODE:-test}
+      - PHREEQC_EXECUTABLE_PATH=${PHREEQC_EXECUTABLE_PATH:-/usr/bin/phreeqc}
+      - PHREEQC_EXECUTABLE_PATH_VPS=${PHREEQC_EXECUTABLE_PATH_VPS:-/usr/bin/phreeqc}
+      - PHREEQC_DATABASE_PATH=${PHREEQC_DATABASE_PATH:-/app/data}
+      - PHREEQC_DATABASE_PATH_VPS=${PHREEQC_DATABASE_PATH_VPS:-/phreeqc-3.8.6-17100/database}
+      - PHREEQC_DEFAULT_DATABASE=${PHREEQC_DEFAULT_DATABASE:-phreeqc.dat}
+      - PHREEQC_PITZER_DATABASE=${PHREEQC_PITZER_DATABASE:-pitzer.dat}
+      - PHREEQC_DB_HOST_PATH=${PHREEQC_DB_HOST_PATH:-./phreeqc-3.8.6-17100/database}
+      - PHREEQC_TIMEOUT=${PHREEQC_TIMEOUT:-120}
       
       # Feature flags
       - ENABLE_AI_SUGGESTIONS=true
@@ -44,6 +50,8 @@ services:
       # Persistent data
       - ./data:/app/data
       - ./logs:/app/logs
+      # Optional host path for PHREEQC database (set PHREEQC_DB_HOST_PATH in .env on VPS)
+      - ${PHREEQC_DB_HOST_PATH:-./phreeqc-3.8.6-17100/database}:/phreeqc-3.8.6-17100/database:ro
     
     env_file:
       - .env
