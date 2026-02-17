@@ -1329,39 +1329,130 @@ async def modify_graph_with_prompt(request: GraphModifyRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/water/recalculate")
+# @router.post("/water/recalculate")
+# async def recalculate_analysis(request: RecalculateRequest):
+#     """Recalculate with adjusted parameters"""
+#     try:
+#         report = await db.get_water_report(request.report_id)
+#         if not report:
+#             raise HTTPException(status_code=404, detail="Report not found")
+        
+#         updated_parameters = {**report["extracted_parameters"]}
+#         # for param, value in request.adjusted_parameters.items():
+#         #     if param in updated_parameters:
+#         #         updated_parameters[param]["value"] = value
+#         for param in request.adjusted_parameters:
+#              if param.name in updated_parameters:
+#                   updated_parameters[param.name]["value"] = param.value
+        
+#         # ✅ FIXED: Transform PHREEQC result
+#         phreeqc_service = PHREEQCService()
+#         phreeqc_result = await phreeqc_service.analyze(updated_parameters)
+#         chemical_status = transform_phreeqc_result(phreeqc_result, updated_parameters)
+        
+#         # return {
+#         #     "report_id": request.report_id,
+#         #     "status": "recalculated",
+#         #     "adjusted": request.adjusted_parameters,
+#         #     "chemical_status": chemical_status
+#         # }
+#         return {
+#                 "report_id": request.report_id,
+#                 "status": "recalculated",
+#                 "adjusted": {p.name: p.value for p in request.adjusted_parameters},  # ✅
+#                 "chemical_status": chemical_status
+#            }
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@router.post("/water/recalculate", response_model=WaterAnalysisResponse)
 async def recalculate_analysis(request: RecalculateRequest):
-    """Recalculate with adjusted parameters"""
+    """Recalculate with adjusted parameters - returns full analysis"""
     try:
         report = await db.get_water_report(request.report_id)
         if not report:
             raise HTTPException(status_code=404, detail="Report not found")
-        
+
+        # ✅ Adjusted parameters update
         updated_parameters = {**report["extracted_parameters"]}
-        # for param, value in request.adjusted_parameters.items():
-        #     if param in updated_parameters:
-        #         updated_parameters[param]["value"] = value
         for param in request.adjusted_parameters:
-             if param.name in updated_parameters:
-                  updated_parameters[param.name]["value"] = param.value
-        
-        # ✅ FIXED: Transform PHREEQC result
+            if param.name in updated_parameters:
+                updated_parameters[param.name]["value"] = param.value
+
+        # ✅ PHREEQC
         phreeqc_service = PHREEQCService()
         phreeqc_result = await phreeqc_service.analyze(updated_parameters)
         chemical_status = transform_phreeqc_result(phreeqc_result, updated_parameters)
-        
-        # return {
-        #     "report_id": request.report_id,
-        #     "status": "recalculated",
-        #     "adjusted": request.adjusted_parameters,
-        #     "chemical_status": chemical_status
-        # }
-        return {
-                "report_id": request.report_id,
-                "status": "recalculated",
-                "adjusted": {p.name: p.value for p in request.adjusted_parameters},  # ✅
-                "chemical_status": chemical_status
-           }
+
+        # ✅ Graph
+        graph_service = GraphService()
+        parameter_graph = await graph_service.create_parameter_graph(updated_parameters, chemical_status)
+
+        # ✅ Composition
+        composition_service = CompositionService()
+        chemical_composition = await composition_service.analyze(updated_parameters, chemical_status)
+
+        # ✅ Biological
+        biological_service = BiologicalService()
+        biological_indicators = await biological_service.analyze(updated_parameters)
+
+        # ✅ Compliance
+        compliance_service = ComplianceService()
+        compliance_checklist = await compliance_service.check_compliance(updated_parameters, chemical_status)
+
+        # ✅ Risk
+        risk_service = RiskAnalysisService()
+        contamination_risk = await risk_service.analyze_risks(updated_parameters, chemical_status)
+
+        # ✅ Score
+        scoring_service = ScoringService()
+        total_score = await scoring_service.calculate_total_score(
+            chemical_composition, biological_indicators, compliance_checklist, contamination_risk
+        )
+
+        # ✅ Quality Report
+        quality_service = QualityReportService()
+        quality_report = await quality_service.generate_report(
+            updated_parameters, chemical_status, compliance_checklist, contamination_risk
+        )
+
+        # ✅ Save updated report
+        history_service = ReportHistoryService()
+        report_id = await history_service.save_report(
+            extracted_parameters=updated_parameters,
+            chemical_status=chemical_status,
+            parameter_graph=parameter_graph,
+            total_score=total_score,
+            quality_report=quality_report,
+            chemical_composition=chemical_composition,
+            biological_indicators=biological_indicators,
+            compliance_checklist=compliance_checklist,
+            contamination_risk=contamination_risk,
+            sample_location=report.get("sample_location"),
+            sample_date=report.get("sample_date"),
+            original_filename="recalculated"
+        )
+
+        return WaterAnalysisResponse(
+            report_id=report_id,
+            extracted_parameters=updated_parameters,
+            parameter_graph=parameter_graph,
+            chemical_status=chemical_status,
+            total_score=total_score,
+            quality_report=quality_report,
+            chemical_composition=chemical_composition,
+            biological_indicators=biological_indicators,
+            compliance_checklist=compliance_checklist,
+            contamination_risk=contamination_risk,
+            sample_location=report.get("sample_location"),
+            sample_date=report.get("sample_date"),
+            created_at=datetime.utcnow()
+        )
+
     except HTTPException:
         raise
     except Exception as e:
