@@ -93,7 +93,17 @@ class PHREEQCService:
 
         logger.info(f"PHREEQC mode='{mode}' -> exe='{self.phreeqc_executable}' db_dir='{database_dir}' timeout={self.phreeqc_timeout}s")
 
+        # Run verification at initialization (fail-fast on missing executable / DB)
         self._verified = self._verify_phreeqc()
+        if not self._verified:
+            raise RuntimeError(f"PHREEQC executable not found or not executable: {self.phreeqc_executable}")
+
+        # Ensure the configured database file exists (fail fast)
+        if not os.path.isfile(self.phreeqc_dat):
+            raise RuntimeError(
+                f"PHREEQC database file not found at startup: {self.phreeqc_dat}. "
+                f"If running in Docker set PHREEQC_DB_HOST_PATH to the host DB directory and restart."
+            )
 
     # ========================================
     # VERIFY PHREEQC (Windows-safe, resilient)
@@ -146,17 +156,8 @@ class PHREEQCService:
 
             logger.info(f"✅ PHREEQC found: {self.phreeqc_executable}")
 
-            # Run --version on non-Windows to validate runtime
-            if os.name != "nt":
-                try:
-                    result = subprocess.run(
-                        [self.phreeqc_executable, "--version"],
-                        capture_output=True, text=True, timeout=3
-                    )
-                    logger.info(f"   version output: {result.stdout.strip()}")
-                except Exception as e:
-                    logger.warning(f"Unable to run PHREEQC --version check: {e}")
-
+            # NOTE: removed --version check (PHREEQC treats unknown args as input files)
+            # Verification only checks existence and executable permission here.
             return True
         except Exception as e:
             logger.error(f"❌ PHREEQC verify failed: {e}")

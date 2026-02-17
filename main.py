@@ -37,10 +37,19 @@ async def lifespan(app: FastAPI):
         # Connect to MongoDB
         await db.connect()
         logger.info("✅ Database connected")
-        
-        # Initialize services
+
+        # Initialize PHREEQC service at startup (fail-fast if missing)
+        from app.services.phreeqc_service import PHREEQCService
+        try:
+            app.state.phreeqc_service = PHREEQCService()
+            logger.info("✅ PHREEQC service initialized (startup check passed)")
+        except Exception as e:
+            logger.error(f"❌ PHREEQC startup check failed: {e}")
+            raise
+
+        # Initialize other services
         logger.info("✅ Services initialized")
-        
+
     except Exception as e:
         logger.error(f"❌ Startup failed: {e}")
         raise
@@ -94,12 +103,20 @@ async def health_check():
     except:
         db_status = "disconnected"
     
+    # PHREEQC health (derived from startup-initialized service if present)
+    phreeqc_ok = False
+    try:
+        svc = app.state.phreeqc_service
+        phreeqc_ok = bool(getattr(svc, "_verified", False) and os.path.isfile(getattr(svc, "phreeqc_dat", "")))
+    except Exception:
+        phreeqc_ok = False
+
     return {
         "status": "ok",
         "database": db_status,
         "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
         "aws_configured": bool(os.getenv("AWS_ACCESS_KEY_ID")),
-        "phreeqc_configured": bool(os.getenv("PHREEQC_EXECUTABLE_PATH"))
+        "phreeqc_configured": phreeqc_ok
     }
 
 
