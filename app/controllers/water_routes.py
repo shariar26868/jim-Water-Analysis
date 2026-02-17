@@ -696,6 +696,7 @@ from app.models.schemas import (
     WaterAnalysisResponse,
     GraphModifyRequest,
     RecalculateRequest,
+    AdjustedParameter,
     ReportHistoryResponse,
     ErrorResponse
 )
