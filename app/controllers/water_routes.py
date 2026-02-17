@@ -1337,22 +1337,30 @@ async def recalculate_analysis(request: RecalculateRequest):
             raise HTTPException(status_code=404, detail="Report not found")
         
         updated_parameters = {**report["extracted_parameters"]}
-        for param, value in request.adjusted_parameters.items():
-            if param in updated_parameters:
-                updated_parameters[param]["value"] = value
+        # for param, value in request.adjusted_parameters.items():
+        #     if param in updated_parameters:
+        #         updated_parameters[param]["value"] = value
+        for param in request.adjusted_parameters:
+             if param.name in updated_parameters:
+                  updated_parameters[param.name]["value"] = param.value
         
         # ✅ FIXED: Transform PHREEQC result
         phreeqc_service = PHREEQCService()
         phreeqc_result = await phreeqc_service.analyze(updated_parameters)
         chemical_status = transform_phreeqc_result(phreeqc_result, updated_parameters)
         
+        # return {
+        #     "report_id": request.report_id,
+        #     "status": "recalculated",
+        #     "adjusted": request.adjusted_parameters,
+        #     "chemical_status": chemical_status
+        # }
         return {
-            "report_id": request.report_id,
-            "status": "recalculated",
-            "adjusted": request.adjusted_parameters,
-            "chemical_status": chemical_status
-        }
-        
+                "report_id": request.report_id,
+                "status": "recalculated",
+                "adjusted": {p.name: p.value for p in request.adjusted_parameters},  # ✅
+                "chemical_status": chemical_status
+           }
     except HTTPException:
         raise
     except Exception as e:

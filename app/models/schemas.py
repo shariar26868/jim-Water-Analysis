@@ -1100,21 +1100,46 @@ class AnalyzeRequest(BaseModel):
     custom_standards: Optional[List[str]] = None
 
 
+# class RecalculateRequest(BaseModel):
+#     """Request to recalculate with adjusted parameters"""
+#     report_id: str
+#     adjusted_parameters: Dict[str, float]
+    
+#     class Config:
+#         json_schema_extra = {
+#             "example": {
+#                 "report_id": "WQR-2024-001",
+#                 "adjusted_parameters": {
+#                     "Calcium": 90.0,
+#                     "Magnesium": 45.0
+#                 }
+#             }
+#         }
+
+
+# ========== EXISTING API REQUESTS ==========
+
+class AdjustedParameter(BaseModel):          # 🆕 নতুন class যোগ করুন
+    name: str
+    value: float
+
+
 class RecalculateRequest(BaseModel):
     """Request to recalculate with adjusted parameters"""
     report_id: str
-    adjusted_parameters: Dict[str, float]
-    
+    adjusted_parameters: List[AdjustedParameter]  # ✅ Dict → List
+
     class Config:
         json_schema_extra = {
             "example": {
                 "report_id": "WQR-2024-001",
-                "adjusted_parameters": {
-                    "Calcium": 90.0,
-                    "Magnesium": 45.0
-                }
+                "adjusted_parameters": [
+                    {"name": "pH", "value": 7.41},
+                    {"name": "Nitrate_as_Nitrogen", "value": 0.5}
+                ]
             }
         }
+
 
 
 # ========== REPORT HISTORY (UNCHANGED) ==========
