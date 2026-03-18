@@ -491,3 +491,4 @@ def get_parameter_category(parameter_name: str) -> str:
     """Get category of parameter"""
     formula_info = get_chemical_formula(parameter_name)
     return formula_info.get("category", "unknown")
+
