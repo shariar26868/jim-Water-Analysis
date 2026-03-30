@@ -625,7 +625,7 @@
 #     try:
 #         skip = (page - 1) * page_size
 #         reports = await db.get_all_reports(limit=page_size, skip=skip)
-#         total_count = await db.db.water_reports.count_documents({})
+#         total_count = await db.db.water_ai_reports.count_documents({})
         
 #         summaries = [
 #             {
@@ -766,6 +766,19 @@ def transform_phreeqc_result(
             return val.get("value", default)
         return val
     
+    def _si_status(si_val: float) -> str:
+        if si_val < -0.5:  return "undersaturated"
+        if si_val <= 0.5:  return "near_equilibrium"
+        return "supersaturated"
+
+    # Ensure every SI item has a status field
+    raw_si = phreeqc_result.get("saturation_indices", [])
+    si_with_status = []
+    for item in raw_si:
+        if isinstance(item, dict) and "status" not in item:
+            item = {**item, "status": _si_status(item.get("si_value", 0.0))}
+        si_with_status.append(item)
+
     # Transform to expected format
     return {
         "input_parameters": parameters,
@@ -779,7 +792,7 @@ def transform_phreeqc_result(
             "charge_balance_error",
             phreeqc_result.get("charge_balance_error_pct", 0.0)
         ),
-        "saturation_indices": phreeqc_result.get("saturation_indices", []),
+        "saturation_indices": si_with_status,
         "ionic_strength": phreeqc_result.get("ionic_strength", 0.0),
         "database_used": phreeqc_result.get("database_used", "unknown"),
         "molalities": phreeqc_result.get("molalities", {}),
@@ -1468,7 +1481,7 @@ async def get_report_history(
     try:
         skip = (page - 1) * page_size
         reports = await db.get_all_reports(limit=page_size, skip=skip)
-        total_count = await db.db.water_reports.count_documents({})
+        total_count = await db.db.water_ai_reports.count_documents({})
         
         summaries = [
             {
@@ -1841,4 +1854,141 @@ async def predict_corrosion_rate(
         raise
     except Exception as e:
         logger.exception("❌ Corrosion prediction failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# SATURATION ANALYSIS — 3 Endpoints
+# ============================================================
+from app.services.saturation_service import SaturationService
+from app.models.schemas import (
+    SaturationRunRequest,
+    SaturationRunResponse,
+    SaturationSwitchSaltRequest,
+    SaturationSwitchSaltResponse,
+)
+
+
+@router.post(
+    "/saturation/run-analysis",
+    summary="Run Saturation Analysis & Generate 3D Graph",
+    tags=["Saturation Analysis"],
+)
+async def run_saturation_analysis(request: SaturationRunRequest):
+    """
+    Full saturation analysis pipeline:
+    1. Dynamic water param mapping (OCR keys → PHREEQC ions)
+    2. pH adjustment chemical corrections
+    3. CoC × Temperature grid build
+    4. Ionic strength check → phreeqc.dat or pitzer.dat
+    5. Ion balance (charge balance ±5%)
+    6. PHREEQC batch run — ALL salts saved with full detail
+    7. Color coding (green/yellow/red) from raw_material_chemistry band cushions
+    8. 3D bar chart → S3 upload → URL returned
+    9. Full results saved to MongoDB
+
+    salt_id / salts_of_interest = null → analyze ALL salts
+    """
+    try:
+        service = SaturationService()
+        result  = await service.run_analysis(request.model_dump())
+        return {"success": True, "message": "Successfully performed Saturation Analysis!", "data": result}
+
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.exception("Saturation analysis unexpected error")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@router.post(
+    "/saturation/switch-salt",
+    summary="Switch Salt View (no PHREEQC re-run)",
+    tags=["Saturation Analysis"],
+)
+async def switch_salt_view(request: SaturationSwitchSaltRequest):
+    """
+    Re-generate 3D graph for a different salt using already-saved grid data.
+    No PHREEQC re-calculation — instant response.
+
+    Body: { "run_id": "...", "salt_id": "Gypsum" }
+    """
+    try:
+        service = SaturationService()
+        result  = await service.switch_salt(request.run_id, request.salt_id)
+        return {"success": True, "message": f"Graph updated for salt: {request.salt_id}", "data": result}
+
+    except ValueError as e:
+        # Could be "Run not found" (404) or "Salt not found" (422)
+        msg = str(e)
+        status = 404 if "not found" in msg.lower() and "salt" not in msg.lower() else 422
+        raise HTTPException(status_code=status, detail=msg)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.exception("Switch salt unexpected error")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@router.post(
+    "/saturation/debug-phreeqc",
+    summary="Debug: See raw PHREEQC output",
+    tags=["Saturation Analysis"],
+)
+async def debug_phreeqc_output(data: Dict[str, Any] = Body(...)):
+    """
+    Debug endpoint — runs a single PHREEQC calculation and returns raw output.
+    Use this to see exact output format for parser debugging.
+    """
+    try:
+        from app.services.phreeqc_service import PHREEQCService
+        svc = PHREEQCService()
+
+        params = data.get("params", {
+            "pH": 7.2, "Temperature": 25.0,
+            "Ca": 80.0, "Mg": 25.0, "Na": 40.0,
+            "Cl": 30.0, "SO4": 60.0, "HCO3": 120.0, "SiO2": 15.0,
+        })
+
+        # Get raw output text directly
+        pqi = svc._build_pqi(params)
+        raw_output = await svc._execute_phreeqc_raw(pqi, svc.phreeqc_dat)
+        parsed     = svc._parse_phreeqc_output(raw_output)
+
+        return {
+            "pqi_input":          pqi,
+            "raw_output_preview": raw_output[:6000],
+            "raw_output_tail":    raw_output[-2000:],
+            "parsed_si_count":    len(parsed["saturation_indices"]),
+            "parsed_si_sample":   parsed["saturation_indices"][:10],
+            "ionic_strength":     parsed["ionic_strength"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/saturation/available-salts",
+    summary="Get All Available PHREEQC Salts",
+    tags=["Saturation Analysis"],
+)
+async def get_available_salts():
+    """
+    Returns all mineral/salt names available in the PHREEQC database.
+    Result is cached in MongoDB (7-day TTL).
+
+    Response: [{ "name": "Calcite", "chemical_formula": "CaCO3", "phase": "..." }, ...]
+    """
+    try:
+        service = SaturationService()
+        salts   = await service.get_available_salts()
+        return {
+            "success": True,
+            "total":   len(salts),
+            "salts":   salts,
+        }
+    except Exception as e:
+        logger.exception("Get available salts failed")
         raise HTTPException(status_code=500, detail=str(e))

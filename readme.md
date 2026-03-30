@@ -144,7 +144,7 @@ Response: Deletion confirmation
 
 ### Core Collections
 
-1. **water_reports** - All analysis reports
+1. **water_ai_reports** - All analysis reports
 2. **parameter_standards** - Dynamic thresholds for each parameter
 3. **calculation_formulas** - PHREEQC and custom formulas
 4. **graph_templates** - Graph styling configuration

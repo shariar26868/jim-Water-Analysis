@@ -457,7 +457,11 @@ class SaturationIndex(BaseModel):
     """Saturation index for a mineral"""
     mineral_name: str
     si_value: float
-    status: str
+    status: Optional[str] = None
+    log_IAP: Optional[float] = None
+    log_K: Optional[float] = None
+    phase: Optional[str] = None
+    chemical_formula: Optional[str] = None
 
 
 class ChemicalStatus(BaseModel):
@@ -1194,3 +1198,161 @@ class CalculationFormula(BaseModel):
     interpretation: Optional[Dict[str, Any]] = None
     unit: Optional[str] = None
     description: Optional[str] = None
+
+
+# ========================================
+# ========================================
+# 🆕 SATURATION ANALYSIS — New AI-server payload format
+# ========================================
+
+class RawMaterialItem(BaseModel):
+    rawId:           str
+    percentage:      float
+    nameSnapshot:    Optional[str] = None
+    costSnapshot:    Optional[float] = None
+
+
+class ProductBlend(BaseModel):
+    productId:        Optional[str]  = None
+    productName:      Optional[str]  = None
+    waterPercentage:  Optional[float] = None
+    rawMaterials:     Optional[List[RawMaterialItem]] = None
+
+
+class InhibitionFormula(BaseModel):
+    salToInhibit:                    Optional[str] = None
+    applicableIonicStrength:         Optional[str] = None
+    formulaForInhibitionPerformance: Optional[str] = None
+
+
+class RawMaterialChemistry(BaseModel):
+    rawMaterialId:              Optional[str]  = None
+    commonName:                 Optional[str]  = None
+    activeComponentName:        Optional[str]  = None
+    activePercentage:           Optional[float] = None
+    activePercentageChemicalFormula: Optional[str] = None
+    inhibitionFormulas:         Optional[List[InhibitionFormula]] = None
+    bandUpperCushion:           Optional[str]  = None   # upper yellow threshold
+    bandLowerCushion:           Optional[str]  = None   # lower yellow threshold
+
+
+class AssetInfo(BaseModel):
+    name:               Optional[str]       = None
+    type:               Optional[str]       = None
+    towerType:          Optional[str]       = None
+    systemVolume:       Optional[float]     = None
+    systemMetallurgy:   Optional[List[str]] = None
+    systemMaterials:    Optional[List[str]] = None
+    recirculationRate:  Optional[float]     = None
+
+
+class SaturationRunRequest(BaseModel):
+    """
+    Request body sent by AI server to POST /saturation/run-analysis.
+    base_water_parameters is fully dynamic (OCR-extracted keys vary per report).
+    All fields except base_water_parameters are optional with sensible defaults.
+    """
+    # Dynamic water params — keys vary (e.g. "Calcium", "Ca", "Sulphate", "SO4")
+    base_water_parameters: Dict[str, Any]
+
+    # Salt selection — null = analyze ALL available salts
+    salt_id:              Optional[str]       = None
+    salts_of_interest:    Optional[List[str]] = None
+
+    # Dosage
+    dosage_ppm:           Optional[float]     = 2.0
+
+    # CoC range
+    coc_min:              Optional[float]     = 1.0
+    coc_max:              Optional[float]     = 10.0
+    coc_interval:         Optional[float]     = 1.0
+
+    # Temperature range
+    temp_min:             Optional[float]     = 25.0
+    temp_max:             Optional[float]     = 60.0
+    temp_interval:        Optional[float]     = 5.0
+    temp_unit:            Optional[str]       = "F"   # "F" or "C"
+
+    # pH
+    ph_mode:              Optional[str]       = "natural"  # "fixed" | "natural"
+    fixed_ph:             Optional[float]     = None
+
+    # pH adjustment chemical
+    adjustment_chemical:  Optional[str]       = None   # "H2SO4" | "HCl" | "NaOH"
+
+    # Charge balance ions
+    balance_cation:       Optional[str]       = "Na"
+    balance_anion:        Optional[str]       = "Cl"
+
+    # Treatment / product info (for color band thresholds)
+    product_blend:        Optional[ProductBlend]        = None
+    raw_material_chemistry: Optional[RawMaterialChemistry] = None
+
+    # Asset metadata (informational only)
+    asset_info:           Optional[AssetInfo] = None
+
+
+class SaturationSwitchSaltRequest(BaseModel):
+    """Request body for POST /saturation/switch-salt"""
+    run_id:    str
+    salt_id:   str
+
+
+# ── Response models ──────────────────────────────────────────────────────────
+
+class SaturationIndexDetail(BaseModel):
+    """Full PHREEQC saturation index detail for one mineral"""
+    SI:              float
+    log_IAP:         Optional[float] = None
+    log_K:           Optional[float] = None
+    phase:           Optional[str]   = None
+    chemical_formula: Optional[str]  = None
+
+
+class SaturationGridPoint(BaseModel):
+    """Single grid point result"""
+    _grid_CoC:               float
+    _grid_temp:              float   # always Celsius
+    _grid_pH:                float
+    # full detail per mineral
+    saturation_indices:      Dict[str, SaturationIndexDetail]
+    # description of solution from PHREEQC
+    description_of_solution: Optional[Dict[str, Any]] = None
+    color_code:              str     # "green" | "yellow" | "red"
+    ionic_strength:          Optional[float] = None
+    charge_balance_error_pct: Optional[float] = None
+
+
+class SaturationRunResponse(BaseModel):
+    """Response from POST /saturation/run-analysis"""
+    run_id:            str
+    salt_id:           Optional[str]
+    salts_of_interest: Optional[List[str]]
+    dosage_ppm:        float
+    coc_min:           float
+    coc_max:           float
+    coc_interval:      float
+    temp_min:          float
+    temp_max:          float
+    temp_interval:     float
+    temp_unit:         str
+    ph_mode:           str
+    fixed_ph:          Optional[float]
+    adjustment_chemical: Optional[str]
+    balance_cation:    str
+    balance_anion:     str
+    database_used:     str
+    total_grid_points: int
+    grid_results:      List[Dict[str, Any]]
+    graph_url:         str
+    graph_data:        Dict[str, Any]
+    summary:           Dict[str, int]
+    created_at:        str
+
+
+class SaturationSwitchSaltResponse(BaseModel):
+    run_id:    str
+    salt_id:   str
+    graph_url: str
+    graph_data: Dict[str, Any]
+    summary:   Dict[str, int]

@@ -128,7 +128,7 @@ class ReportHistoryService:
             reports = await db.get_all_reports(limit=limit, skip=skip)
             
             # Count total
-            total_count = await db.db.water_reports.count_documents({})
+            total_count = await db.db.water_ai_reports.count_documents({})
             
             return {
                 "reports": reports,

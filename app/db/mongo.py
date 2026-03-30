@@ -43,8 +43,8 @@ class MongoDB:
         """Create database indexes for performance"""
         try:
             # Water reports index
-            await cls.db.water_reports.create_index("report_id", unique=True)
-            await cls.db.water_reports.create_index("created_at")
+            await cls.db.water_ai_reports.create_index("report_id", unique=True)
+            await cls.db.water_ai_reports.create_index("created_at")
             
             # Parameter standards index
             await cls.db.parameter_standards.create_index("parameter_name", unique=True)
@@ -55,6 +55,10 @@ class MongoDB:
             # ✅ NEW: PHREEQC cache index
             await cls.db.phreeqc_database_cache.create_index("database_name", unique=True)
             await cls.db.phreeqc_database_cache.create_index("cached_at")
+
+            # Saturation runs index
+            await cls.db.saturation_runs.create_index("run_id", unique=True)
+            await cls.db.saturation_runs.create_index("created_at")
             
             logger.info("✅ Database indexes created")
         except Exception as e:
@@ -77,7 +81,7 @@ class MongoDB:
     @classmethod
     async def save_water_report(cls, report_data: Dict[str, Any]) -> str:
         """Save complete water analysis report"""
-        collection = cls.db.water_reports
+        collection = cls.db.water_ai_reports
         
         report_data["created_at"] = datetime.utcnow()
         report_data["updated_at"] = datetime.utcnow()
@@ -90,14 +94,14 @@ class MongoDB:
     @classmethod
     async def get_water_report(cls, report_id: str) -> Optional[Dict]:
         """Retrieve water report by ID"""
-        collection = cls.db.water_reports
+        collection = cls.db.water_ai_reports
         report = await collection.find_one({"report_id": report_id})
         return report
 
     @classmethod
     async def get_all_reports(cls, limit: int = 100, skip: int = 0) -> List[Dict]:
         """Get all water reports with pagination"""
-        collection = cls.db.water_reports
+        collection = cls.db.water_ai_reports
         cursor = collection.find().sort("created_at", -1).skip(skip).limit(limit)
         reports = await cursor.to_list(length=limit)
         return reports
@@ -105,7 +109,7 @@ class MongoDB:
     @classmethod
     async def update_water_report(cls, report_id: str, update_data: Dict) -> bool:
         """Update existing water report"""
-        collection = cls.db.water_reports
+        collection = cls.db.water_ai_reports
         
         update_data["updated_at"] = datetime.utcnow()
         
@@ -119,7 +123,7 @@ class MongoDB:
     @classmethod
     async def delete_water_report(cls, report_id: str) -> bool:
         """Delete water report"""
-        collection = cls.db.water_reports
+        collection = cls.db.water_ai_reports
         result = await collection.delete_one({"report_id": report_id})
         return result.deleted_count > 0
 

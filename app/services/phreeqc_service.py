@@ -393,20 +393,35 @@ class PHREEQCService:
 
         # Ions (mg/L → mmol/kgw)
         ion_map = {
-            "Ca": "Ca", "Mg": "Mg", "Na": "Na", "K": "K",
-            "Cl": "Cl", "SO4": "SO4", "HCO3": "Alkalinity",
-            "SiO2": "Si", "Ba": "Ba", "Sr": "Sr",
-            "Fe": "Fe", "Al": "Al", "F": "F", "PO4": "P",
-            "Li": "Li", "Zn": "Zn", "Cu": "Cu", "Sn": "Sn"
+            "Ca":   ("Ca",        "Ca"),
+            "Mg":   ("Mg",        "Mg"),
+            "Na":   ("Na",        "Na"),
+            "K":    ("K",         "K"),
+            "Cl":   ("Cl",        "Cl"),
+            "SO4":  ("S(6)",      "SO4"),   # PHREEQC requires S(6) not SO4
+            "HCO3": ("Alkalinity","HCO3"),
+            "SiO2": ("Si",        "SiO2"),
+            "Ba":   ("Ba",        "Ba"),
+            "Sr":   ("Sr",        "Sr"),
+            "Fe":   ("Fe(2)",     "Fe"),
+            "Al":   ("Al",        "Al"),
+            "F":    ("F",         "F"),
+            "PO4":  ("P",         "PO4"),
+            "Li":   ("Li",        "Li"),
+            "Zn":   ("Zn",        "Zn"),
+            "Cu":   ("Cu",        "Cu"),
+            "Sn":   ("Sn",        "Sn"),
+            "Mn":   ("Mn",        "Mn"),
+            "NO3":  ("N(5)",      "NO3"),
         }
 
-        for param_key, phreeqc_name in ion_map.items():
+        for param_key, (phreeqc_name, as_name) in ion_map.items():
             value = _get_param_value(water_params, param_key)
             if value is not None and value > 0:
                 props = self.ION_PROPERTIES.get(param_key)
                 if props and props["mw"] > 0:
                     mmol = (value / props["mw"])
-                    lines.append(f"    {phreeqc_name:12s} {mmol:.6f}  as {param_key}")
+                    lines.append(f"    {phreeqc_name:12s} {mmol:.6f}  as {as_name}")
 
         lines.append("")
         lines.append("SELECTED_OUTPUT")
@@ -436,31 +451,37 @@ class PHREEQCService:
         lines = []
         
         ion_map = {
-            "Ca": "Ca", "Mg": "Mg", "Na": "Na", "K": "K",
-            "Cl": "Cl", "SO4": "SO4", "HCO3": "Alkalinity",
-            "SiO2": "Si", "Ba": "Ba", "Sr": "Sr"
+            "Ca":   ("Ca",        "Ca"),
+            "Mg":   ("Mg",        "Mg"),
+            "Na":   ("Na",        "Na"),
+            "K":    ("K",         "K"),
+            "Cl":   ("Cl",        "Cl"),
+            "SO4":  ("S(6)",      "SO4"),
+            "HCO3": ("Alkalinity","HCO3"),
+            "SiO2": ("Si",        "SiO2"),
+            "Ba":   ("Ba",        "Ba"),
+            "Sr":   ("Sr",        "Sr"),
+            "Fe":   ("Fe(2)",     "Fe"),
+            "Mn":   ("Mn",        "Mn"),
         }
-        
+
         # Create one SOLUTION block per grid point
         for i, point in enumerate(grid_points, start=1):
             lines.append(f"SOLUTION {i}")
             lines.append(f"    pH    {point['pH']:.2f}")
             lines.append(f"    temp  {point['temp']:.1f}")
-            
-            # Apply CoC to all ions for this grid point
+
             coc = point.get("CoC", 1.0)
-            
-            for param_key, phreeqc_name in ion_map.items():
+
+            for param_key, (phreeqc_name, as_name) in ion_map.items():
                 base_value = _get_param_value(base_params, param_key)
                 if base_value is not None and base_value > 0:
                     props = self.ION_PROPERTIES.get(param_key)
                     if props and props["mw"] > 0:
-                        # Apply CoC to get concentrated value
                         concentrated_value = base_value * coc
-                        # Convert mg/L to mmol/kgw
                         mmol = concentrated_value / props["mw"]
-                        lines.append(f"    {phreeqc_name:12s} {mmol:.6f}  as {param_key}")
-            
+                        lines.append(f"    {phreeqc_name:12s} {mmol:.6f}  as {as_name}")
+
             lines.append("")
         
         # Single SELECTED_OUTPUT block for all solutions
@@ -584,26 +605,48 @@ class PHREEQCService:
         lines = output_text.split("\n")
 
         # --- Saturation Indices ---
+        # PHREEQC output format:
+        # "------------------------------Saturation indices-------------------------------"
+        # "  Phase               SI** log IAP   log K(298 K,   1 atm)"
+        # "  Anhydrite        -2.09     -6.37   -4.28  CaSO4"
         in_si_block = False
         for line in lines:
             stripped = line.strip()
 
-            if "Saturation Indices" in stripped or "SI for" in stripped:
+            # Header detection — case-insensitive
+            if re.search(r"saturation indices", stripped, re.IGNORECASE):
                 in_si_block = True
                 continue
 
             if in_si_block:
-                # Typical format: "  Calcite        0.45"
-                match = re.match(r"^\s+(\S+)\s+([-+]?\d+\.?\d*)", stripped)
-                if match:
-                    mineral = match.group(1)
-                    si_val  = float(match.group(2))
-                    parsed["saturation_indices"].append({
-                        "mineral_name": mineral,
-                        "si_value":     round(si_val, 4)
-                    })
-                elif stripped == "" and parsed["saturation_indices"]:
-                    in_si_block = False
+                # Skip empty lines, dashes, and column header lines
+                if not stripped or stripped.startswith("-") or stripped.startswith("Phase") or stripped.startswith("**"):
+                    if stripped.startswith("**") or stripped.startswith("End of"):
+                        in_si_block = False
+                    continue
+
+                # Format: "  Anhydrite        -2.09     -6.37   -4.28  CaSO4"
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    try:
+                        mineral  = parts[0]
+                        si_val   = float(parts[1])
+                        log_iap  = float(parts[2]) if len(parts) > 2 else None
+                        log_k    = float(parts[3]) if len(parts) > 3 else None
+                        # formula is last token if it contains letters (e.g. CaSO4, CaCO3)
+                        formula  = parts[-1] if len(parts) > 4 and re.search(r'[A-Za-z]', parts[-1]) else None
+                        phase    = parts[4] if len(parts) > 4 and parts[4] != formula else None
+
+                        parsed["saturation_indices"].append({
+                            "mineral_name":     mineral,
+                            "si_value":         round(si_val, 4),
+                            "log_IAP":          round(log_iap, 4) if log_iap is not None else None,
+                            "log_K":            round(log_k, 4)   if log_k   is not None else None,
+                            "phase":            phase,
+                            "chemical_formula": formula,
+                        })
+                    except (ValueError, IndexError):
+                        pass
 
         # --- Ionic Strength ---
         for line in lines:
@@ -650,6 +693,28 @@ class PHREEQCService:
                 elif line.strip() == "":
                     in_eq_phase = False
 
+        # --- Description of Solution ---
+        desc: Dict[str, Any] = {}
+        for line in lines:
+            if "pH" in line and "=" in line and "pe" not in line.lower():
+                m = re.search(r"pH\s*=\s*([\d.]+)", line)
+                if m:
+                    desc["pH"] = float(m.group(1))
+            if "Temperature" in line and "=" in line:
+                m = re.search(r"Temperature\s*=\s*([\d.]+)", line)
+                if m:
+                    desc["temperature_C"] = float(m.group(1))
+            if "Density" in line and "=" in line:
+                m = re.search(r"Density\s*=\s*([\d.eE+\-]+)", line)
+                if m:
+                    desc["density"] = float(m.group(1))
+            if "Activity of water" in line:
+                m = re.search(r"Activity of water\s*=\s*([\d.eE+\-]+)", line)
+                if m:
+                    desc["activity_of_water"] = float(m.group(1))
+        if desc:
+            parsed["description_of_solution"] = desc
+
         return parsed
 
     # ========================================
@@ -662,24 +727,35 @@ class PHREEQCService:
     ) -> List[Dict[str, Any]]:
         """
         Parse multi-solution PHREEQC output.
-        Each solution block is separated and mapped back to grid_points.
+        PHREEQC output separates solutions with dashes + "Beginning of initial solution calculations"
+        or "Solution composition" headers. We split on those markers.
         """
         results = []
 
-        # Split by SOLUTION blocks
-        solution_blocks = re.split(r"(?=SOLUTION\s+\d+)", output_text)
+        # PHREEQC separates each solution with this header line
+        blocks = re.split(r"-+\n?Beginning of initial solution calculations\.\n?-+", output_text)
+
+        # First block is preamble (database reading), skip it
+        solution_blocks = [b for b in blocks[1:] if b.strip()]
+
+        logger.debug(f"Split into {len(solution_blocks)} solution blocks for {len(grid_points)} grid points")
 
         for i, block in enumerate(solution_blocks):
             if i >= len(grid_points):
                 break
-            if not block.strip():
-                continue
 
             parsed = self._parse_phreeqc_output(block)
             parsed["_grid_pH"]   = grid_points[i]["pH"]
             parsed["_grid_CoC"]  = grid_points[i]["CoC"]
             parsed["_grid_temp"] = grid_points[i]["temp"]
             results.append(parsed)
+
+        # If we got fewer results than grid points (parsing issue), fill remaining
+        if len(results) < len(grid_points) and len(results) > 0:
+            logger.warning(
+                f"Got {len(results)} parsed blocks for {len(grid_points)} grid points. "
+                "Remaining points will use last parsed result as approximation."
+            )
 
         return results
 
