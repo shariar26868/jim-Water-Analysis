@@ -448,28 +448,235 @@ class SaturationService:
         salt_id: Optional[str],
         temp_unit: str,
     ) -> Dict[str, Any]:
-        points = []
+        """
+        Build Plotly-ready 3D bar chart data.
+        Frontend can render this directly with Plotly or Three.js.
+
+        Structure:
+          - bars[]        → one entry per grid point, with x/y/z + color + full tooltip
+          - plotly_traces → ready-to-use Plotly trace objects (one per color group)
+          - axes          → axis labels and ranges
+          - color_map     → hex colors for green/yellow/red
+          - summary       → count per color
+        """
+        temp_label = f"Temperature ({'°F' if temp_unit.upper() == 'F' else '°C'})"
+
+        # ── Helper: resolve SI value case-insensitively ──────────────────
+        def _get_si(si_dict: Dict, target: Optional[str]) -> Optional[float]:
+            if not target:
+                return None
+            if target in si_dict:
+                v = si_dict[target]
+                return v.get("SI") if isinstance(v, dict) else float(v)
+            tl = target.lower()
+            for k, v in si_dict.items():
+                if k.lower() == tl:
+                    return v.get("SI") if isinstance(v, dict) else float(v)
+            return None
+
+        # ── Build bars ───────────────────────────────────────────────────
+        bars = []
         for r in results:
-            temp_display = (r["_grid_temp"] * 9/5 + 32) if temp_unit.upper() == "F" else r["_grid_temp"]
-            si_val = None
-            if salt_id and salt_id in r["saturation_indices"]:
-                si_val = r["saturation_indices"][salt_id]["SI"]
-            points.append({
-                "x": r["_grid_CoC"],
-                "y": si_val,
-                "z": round(temp_display, 1),
+            temp_display = round(
+                (r["_grid_temp"] * 9/5 + 32) if temp_unit.upper() == "F" else r["_grid_temp"], 1
+            )
+            si_val = _get_si(r["saturation_indices"], salt_id)
+
+            # Full tooltip data — all SI values for this point
+            all_si = {
+                mineral: (
+                    {
+                        "SI":              info.get("SI"),
+                        "log_IAP":         info.get("log_IAP"),
+                        "log_K":           info.get("log_K"),
+                        "chemical_formula": info.get("chemical_formula"),
+                    }
+                    if isinstance(info, dict) else {"SI": float(info)}
+                )
+                for mineral, info in r["saturation_indices"].items()
+            }
+
+            desc = r.get("description_of_solution") or {}
+
+            bars.append({
+                # Plotly axes
+                "x":     r["_grid_CoC"],
+                "y":     si_val,
+                "z":     temp_display,
+                # Color
                 "color": r["color_code"],
-                "pH": r["_grid_pH"],
+                "color_hex": _COLOUR_HEX.get(r["color_code"], "#BDC3C7"),
+                # Click tooltip — exact values
+                "tooltip": {
+                    "CoC":              r["_grid_CoC"],
+                    "temperature":      f"{temp_display} {'°F' if temp_unit.upper() == 'F' else '°C'}",
+                    "pH":               r["_grid_pH"],
+                    "SI":               si_val,
+                    "salt":             salt_id,
+                    "ionic_strength":   r.get("ionic_strength"),
+                    "charge_balance_error_pct": r.get("charge_balance_error_pct"),
+                    "density":          desc.get("density"),
+                    "activity_of_water": desc.get("activity_of_water"),
+                    "all_saturation_indices": all_si,
+                },
             })
-        return {
-            "axes": {
-                "x": "Cycles of Concentration",
-                "y": f"Saturation Index ({salt_id or 'selected salt'})",
-                "z": f"Temperature ({'°F' if temp_unit.upper() == 'F' else '°C'})",
+
+        # ── Build Plotly traces — true 3D bars using mesh3d ─────────────
+        # Each bar = one rectangular box (8 vertices, 12 triangles)
+        def _make_bar_mesh(x_center, z_center, y_top, color_hex, dx=0.4, dz=4.0):
+            """Create a single 3D bar as mesh3d vertices."""
+            x0, x1 = x_center - dx/2, x_center + dx/2
+            z0, z1 = z_center - dz/2, z_center + dz/2
+            y0, y1 = min(y_top, 0.0), max(y_top, 0.0)
+
+            # 8 corners of the box
+            vx = [x0,x1,x1,x0, x0,x1,x1,x0]
+            vy = [y0,y0,y0,y0, y1,y1,y1,y1]
+            vz = [z0,z0,z1,z1, z0,z0,z1,z1]
+
+            # 12 triangles (2 per face × 6 faces)
+            i = [0,0,1,1,2,2,3,3,4,4,0,0]
+            j = [1,2,2,5,3,6,0,7,5,6,4,5]
+            k = [2,3,5,6,6,7,7,4,6,7,5,1]
+
+            return {
+                "type":       "mesh3d",
+                "x": vx, "y": vy, "z": vz,
+                "i": i, "j": j, "k": k,
+                "color":      color_hex,
+                "opacity":    0.85,
+                "flatshading": True,
+                "showscale":  False,
+                "lighting":   {"ambient": 0.6, "diffuse": 0.8, "specular": 0.3},
+            }
+
+        # Calculate bar dimensions based on grid spacing
+        if len(unique_coc) > 1:
+            dx = (max(unique_coc) - min(unique_coc)) / len(unique_coc) * 0.7
+        else:
+            dx = 0.4
+
+        if len(unique_temp) > 1:
+            dz = (max(unique_temp) - min(unique_temp)) / len(unique_temp) * 0.7
+        else:
+            dz = 4.0
+
+        plotly_traces = []
+
+        # Add one invisible scatter3d per color group for the legend
+        legend_added = set()
+        for bar in bars:
+            color = bar["color"]
+            if color not in legend_added:
+                plotly_traces.append({
+                    "type":   "scatter3d",
+                    "mode":   "markers",
+                    "name":   color_labels.get(color, color),
+                    "x":      [bar["x"]],
+                    "y":      [bar["z"]],
+                    "z":      [bar["y"] if bar["y"] is not None else 0],
+                    "marker": {"size": 0.1, "color": _COLOUR_HEX.get(color, "#BDC3C7")},
+                    "showlegend": True,
+                    "hoverinfo": "skip",
+                })
+                legend_added.add(color)
+
+        # Add mesh3d bar for each grid point
+        for bar in bars:
+            si = bar["y"] if bar["y"] is not None else 0.0
+            mesh = _make_bar_mesh(
+                x_center=bar["x"],
+                z_center=bar["z"],
+                y_top=si,
+                color_hex=_COLOUR_HEX.get(bar["color"], "#BDC3C7"),
+                dx=dx,
+                dz=dz,
+            )
+            # Attach tooltip via customdata on a companion scatter3d point
+            mesh["showlegend"] = False
+            plotly_traces.append(mesh)
+
+            # Invisible hover point at bar top center
+            plotly_traces.append({
+                "type":   "scatter3d",
+                "mode":   "markers",
+                "x":      [bar["x"]],
+                "y":      [bar["z"]],
+                "z":      [si],
+                "marker": {"size": 6, "color": _COLOUR_HEX.get(bar["color"], "#BDC3C7"), "opacity": 0.01},
+                "text":   [bar["tooltip"].get("SI")],
+                "customdata": [bar["tooltip"]],
+                "hovertemplate": (
+                    f"<b>CoC:</b> {bar['x']}<br>"
+                    f"<b>Temp:</b> {bar['z']} {'°F' if temp_unit.upper() == 'F' else '°C'}<br>"
+                    f"<b>pH:</b> {bar['tooltip']['pH']}<br>"
+                    f"<b>SI ({salt_id}):</b> {si:.4f}<br>"
+                    f"<b>Status:</b> {bar['color'].upper()}"
+                    "<extra></extra>"
+                ),
+                "showlegend": False,
+            })
+
+        # ── Plotly layout ────────────────────────────────────────────────
+        x_vals = [b["x"] for b in bars]
+        z_vals = [b["z"] for b in bars]
+        y_vals = [b["y"] for b in bars if b["y"] is not None]
+
+        plotly_layout = {
+            "title": f"Saturation Analysis — {salt_id or 'All Salts'}",
+            "scene": {
+                "xaxis": {
+                    "title": "Cycles of Concentration",
+                    "range": [min(x_vals) - 0.5, max(x_vals) + 0.5] if x_vals else [0, 10],
+                },
+                "yaxis": {
+                    "title": temp_label,
+                    "range": [min(z_vals) - 5, max(z_vals) + 5] if z_vals else [0, 200],
+                },
+                "zaxis": {
+                    "title": f"Saturation Index ({salt_id or 'SI'})",
+                    "range": [
+                        min(y_vals) - 0.5 if y_vals else -2,
+                        max(y_vals) + 0.5 if y_vals else 2,
+                    ],
+                },
+                "bgcolor": "#16213E",
+                "xaxis_gridcolor": "#333355",
+                "yaxis_gridcolor": "#333355",
+                "zaxis_gridcolor": "#333355",
             },
-            "salt_id": salt_id,
-            "points": points,
-            "color_map": _COLOUR_HEX,
+            "paper_bgcolor": "#1A1A2E",
+            "font":   {"color": "white"},
+            "legend": {"bgcolor": "#1A1A2E", "bordercolor": "#444466"},
+            "margin": {"l": 0, "r": 0, "t": 40, "b": 0},
+        }
+
+        color_labels = {
+            "green":  "Protected (Green)",
+            "yellow": "Caution (Yellow)",
+            "red":    "Scale Risk (Red)",
+            "error":  "No Data",
+        }
+
+        # ── Axis range data ──────────────────────────────────────────────
+        unique_coc  = sorted(set(b["x"] for b in bars))
+        unique_temp = sorted(set(b["z"] for b in bars))
+
+        return {
+            "type":          "3d_bar",
+            "salt_id":       salt_id,
+            "temp_unit":     temp_unit,
+            "total_points":  len(bars),
+            "axes": {
+                "x": {"label": "Cycles of Concentration", "values": unique_coc},
+                "y": {"label": f"Saturation Index ({salt_id or 'SI'})", "unit": "SI"},
+                "z": {"label": temp_label, "values": unique_temp},
+            },
+            "bars":           bars,
+            "plotly_traces":  plotly_traces,
+            "plotly_layout":  plotly_layout,
+            "color_map":      _COLOUR_HEX,
+            "color_labels":   color_labels,
         }
 
     # ── STEP: summary counts ─────────────────────────────────────────────────
