@@ -1344,15 +1344,13 @@ class SaturationRunResponse(BaseModel):
     database_used:     str
     total_grid_points: int
     grid_results:      List[Dict[str, Any]]
-    graph_url:         str
-    graph_data:        Dict[str, Any]
+    chart_data:        Dict[str, Any]   # frontend builds interactive 3D chart from this
     summary:           Dict[str, int]
     created_at:        str
 
 
 class SaturationSwitchSaltResponse(BaseModel):
-    run_id:    str
-    salt_id:   str
-    graph_url: str
-    graph_data: Dict[str, Any]
-    summary:   Dict[str, int]
+    run_id:     str
+    salt_id:    str
+    chart_data: Dict[str, Any]
+    summary:    Dict[str, int]

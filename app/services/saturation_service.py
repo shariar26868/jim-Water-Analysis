@@ -13,6 +13,7 @@ All saturation index details saved (Phase, SI, log IAP, log K, formula).
 
 import io
 import logging
+import math
 import os
 import re
 import uuid
@@ -28,6 +29,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from app.db.mongo import db
 from app.services.phreeqc_service import PHREEQCService
+from app.services.calculation_service import CalculationService
+from app.services.cooling_tower_service import CoolingTowerService
 
 logger = logging.getLogger(__name__)
 
@@ -453,13 +456,21 @@ class SaturationService:
         Frontend can render this directly with Plotly or Three.js.
 
         Structure:
-          - bars[]        → one entry per grid point, with x/y/z + color + full tooltip
-          - plotly_traces → ready-to-use Plotly trace objects (one per color group)
-          - axes          → axis labels and ranges
-          - color_map     → hex colors for green/yellow/red
-          - summary       → count per color
+          - bars[]         → one entry per grid point, with x/y/z + color + click_data (ALL SI values)
+          - plotly_traces  → ready-to-use Plotly trace objects (mesh3d + hover scatter)
+          - axes           → axis labels and ranges
+          - color_map      → hex colors for green/yellow/red
+          - color_labels   → human-readable label per color
         """
         temp_label = f"Temperature ({'°F' if temp_unit.upper() == 'F' else '°C'})"
+
+        # ── Color labels (defined FIRST — used in legend + click_data below) ──
+        color_labels = {
+            "green":  "Protected (Green)",
+            "yellow": "Caution (Yellow)",
+            "red":    "Scale Risk (Red)",
+            "error":  "No Data",
+        }
 
         # ── Helper: resolve SI value case-insensitively ──────────────────
         def _get_si(si_dict: Dict, target: Optional[str]) -> Optional[float]:
@@ -482,14 +493,15 @@ class SaturationService:
             )
             si_val = _get_si(r["saturation_indices"], salt_id)
 
-            # Full tooltip data — all SI values for this point
+            # Full SI data for ALL minerals at this grid point
             all_si = {
                 mineral: (
                     {
-                        "SI":              info.get("SI"),
-                        "log_IAP":         info.get("log_IAP"),
-                        "log_K":           info.get("log_K"),
+                        "SI":               info.get("SI"),
+                        "log_IAP":          info.get("log_IAP"),
+                        "log_K":            info.get("log_K"),
                         "chemical_formula": info.get("chemical_formula"),
+                        "phase":            info.get("phase"),
                     }
                     if isinstance(info, dict) else {"SI": float(info)}
                 )
@@ -499,14 +511,30 @@ class SaturationService:
             desc = r.get("description_of_solution") or {}
 
             bars.append({
-                # Plotly axes
-                "x":     r["_grid_CoC"],
-                "y":     si_val,
-                "z":     temp_display,
-                # Color
-                "color": r["color_code"],
+                # ── Plotly 3D axes ──
+                "x":         r["_grid_CoC"],   # X-axis: Cycles of Concentration
+                "y":         si_val,            # Z-axis / bar height: SI value
+                "z":         temp_display,      # Y-axis: Temperature
+                # ── Color ──
+                "color":     r["color_code"],
                 "color_hex": _COLOUR_HEX.get(r["color_code"], "#BDC3C7"),
-                # Click tooltip — exact values
+                # ── click_data: everything frontend needs when user clicks a bar ──
+                "click_data": {
+                    "CoC":              r["_grid_CoC"],
+                    "temperature":      temp_display,
+                    "temperature_unit": "°F" if temp_unit.upper() == "F" else "°C",
+                    "pH":               r["_grid_pH"],
+                    "selected_salt":    salt_id,
+                    "SI":               si_val,
+                    "status":           color_labels.get(r["color_code"], r["color_code"]),
+                    "ionic_strength":   r.get("ionic_strength"),
+                    "charge_balance_error_pct": r.get("charge_balance_error_pct"),
+                    "density":          desc.get("density"),
+                    "activity_of_water": desc.get("activity_of_water"),
+                    # Every mineral/salt SI at this grid point
+                    "all_saturation_indices": all_si,
+                },
+                # ── Legacy tooltip alias (backward compat) ──
                 "tooltip": {
                     "CoC":              r["_grid_CoC"],
                     "temperature":      f"{temp_display} {'°F' if temp_unit.upper() == 'F' else '°C'}",
@@ -520,6 +548,10 @@ class SaturationService:
                     "all_saturation_indices": all_si,
                 },
             })
+
+        # ── Axis range data (defined here — BEFORE bar dimension calc below) ──
+        unique_coc  = sorted(set(b["x"] for b in bars))
+        unique_temp = sorted(set(b["z"] for b in bars))
 
         # ── Build Plotly traces — true 3D bars using mesh3d ─────────────
         # Each bar = one rectangular box (8 vertices, 12 triangles)
@@ -550,7 +582,7 @@ class SaturationService:
                 "lighting":   {"ambient": 0.6, "diffuse": 0.8, "specular": 0.3},
             }
 
-        # Calculate bar dimensions based on grid spacing
+        # Bar dimensions based on grid spacing (unique_* defined above)
         if len(unique_coc) > 1:
             dx = (max(unique_coc) - min(unique_coc)) / len(unique_coc) * 0.7
         else:
@@ -592,26 +624,27 @@ class SaturationService:
                 dx=dx,
                 dz=dz,
             )
-            # Attach tooltip via customdata on a companion scatter3d point
+            # Attach to traces
             mesh["showlegend"] = False
             plotly_traces.append(mesh)
 
-            # Invisible hover point at bar top center
+            # Hover/click point at bar top — carries full click_data
+            cd = bar["click_data"]
             plotly_traces.append({
-                "type":   "scatter3d",
-                "mode":   "markers",
-                "x":      [bar["x"]],
-                "y":      [bar["z"]],
-                "z":      [si],
-                "marker": {"size": 6, "color": _COLOUR_HEX.get(bar["color"], "#BDC3C7"), "opacity": 0.01},
-                "text":   [bar["tooltip"].get("SI")],
-                "customdata": [bar["tooltip"]],
+                "type":       "scatter3d",
+                "mode":       "markers",
+                "x":          [bar["x"]],
+                "y":          [bar["z"]],
+                "z":          [si],
+                "marker":     {"size": 8, "color": _COLOUR_HEX.get(bar["color"], "#BDC3C7"), "opacity": 0.01},
+                "text":       [si],
+                "customdata": [cd],   # full click_data attached here
                 "hovertemplate": (
-                    f"<b>CoC:</b> {bar['x']}<br>"
-                    f"<b>Temp:</b> {bar['z']} {'°F' if temp_unit.upper() == 'F' else '°C'}<br>"
-                    f"<b>pH:</b> {bar['tooltip']['pH']}<br>"
+                    f"<b>CoC:</b> {cd['CoC']}<br>"
+                    f"<b>Temp:</b> {cd['temperature']} {cd['temperature_unit']}<br>"
+                    f"<b>pH:</b> {cd['pH']}<br>"
                     f"<b>SI ({salt_id}):</b> {si:.4f}<br>"
-                    f"<b>Status:</b> {bar['color'].upper()}"
+                    f"<b>Status:</b> {cd['status']}"
                     "<extra></extra>"
                 ),
                 "showlegend": False,
@@ -651,16 +684,7 @@ class SaturationService:
             "margin": {"l": 0, "r": 0, "t": 40, "b": 0},
         }
 
-        color_labels = {
-            "green":  "Protected (Green)",
-            "yellow": "Caution (Yellow)",
-            "red":    "Scale Risk (Red)",
-            "error":  "No Data",
-        }
-
-        # ── Axis range data ──────────────────────────────────────────────
-        unique_coc  = sorted(set(b["x"] for b in bars))
-        unique_temp = sorted(set(b["z"] for b in bars))
+        # (color_labels and unique_coc/unique_temp already defined above)
 
         return {
             "type":          "3d_bar",
@@ -677,6 +701,319 @@ class SaturationService:
             "plotly_layout":  plotly_layout,
             "color_map":      _COLOUR_HEX,
             "color_labels":   color_labels,
+        }
+
+    # ── STEP: enrich each grid point with all calculated values ─────────────
+    @staticmethod
+    async def _enrich_grid_points(
+        results: List[Dict[str, Any]],
+        base_water_parameters: Dict[str, Any],
+        req: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """
+        For each grid point, calculate:
+          - Deposition indices (LSI, RSI, PSI, Larson-Skold, Stiff & Davis, CCPP)
+          - Blowdown & Makeup rates
+          - Chemical feedrate & cost
+          - Corrosion rates (per metal in asset_info.systemMetallurgy)
+        """
+        calc_svc = CalculationService()
+        ct_svc   = CoolingTowerService()
+
+        asset_info       = req.get("asset_info") or {}
+        raw_mat          = req.get("raw_material_chemistry") or {}
+        product_blend    = req.get("product_blend") or {}
+        dosage_ppm       = float(req.get("dosage_ppm", 2.0))
+        temp_unit        = req.get("temp_unit", "C")
+
+        # Cooling tower params from asset_info
+        recirc_rate_gpm  = float(asset_info.get("recirculationRate") or 0)
+        hot_temp_f       = float(asset_info.get("hotWaterTempF") or 0)
+        cold_temp_f      = float(asset_info.get("coldWaterTempF") or 0)
+        wet_bulb_f       = float(asset_info.get("wetBulbTempF") or 0)
+        drift_pct        = float(asset_info.get("driftPercent") or 0.1)
+        evap_factor      = float(asset_info.get("evaporationFactorPercent") or 85.0)
+        metallurgy       = asset_info.get("systemMetallurgy") or []
+
+        # Product cost ($/lb or $/kg)
+        product_cost_per_lb = float(product_blend.get("costPerLb") or 0)
+        product_name        = product_blend.get("productName") or "Product"
+
+        enriched = []
+        for r in results:
+            coc      = r["_grid_CoC"]
+            temp_c   = r["_grid_temp"]   # always °C internally
+            ph       = r["_grid_pH"]
+            ionic_s  = r.get("ionic_strength", 0.0)
+
+            # Build concentrated water params for this grid point
+            conc_params: Dict[str, Any] = {}
+            for key, val in base_water_parameters.items():
+                if isinstance(val, dict):
+                    raw_val = val.get("value", 0)
+                    unit    = val.get("unit", "mg/L")
+                else:
+                    raw_val = val
+                    unit    = "mg/L"
+                try:
+                    numeric = float(raw_val)
+                except (TypeError, ValueError):
+                    numeric = 0.0
+                # pH and Temperature don't scale with CoC
+                if key.lower() in ("ph", "temperature", "temp"):
+                    conc_params[key] = {"value": numeric, "unit": unit}
+                else:
+                    conc_params[key] = {"value": round(numeric * coc, 4), "unit": unit}
+
+            # Override pH and Temperature with grid values
+            conc_params["pH"]          = {"value": ph,     "unit": ""}
+            conc_params["Temperature"] = {"value": temp_c, "unit": "C"}
+
+            # ── Deposition Indices ──────────────────────────────────────────
+            indices: Dict[str, Any] = {}
+            try:
+                indices["lsi"]          = await calc_svc.calculate_lsi(conc_params)
+            except Exception as e:
+                indices["lsi"]          = {"error": str(e)}
+            try:
+                indices["ryznar"]       = await calc_svc.calculate_ryznar(conc_params)
+            except Exception as e:
+                indices["ryznar"]       = {"error": str(e)}
+            try:
+                indices["puckorius"]    = await calc_svc.calculate_puckorius(conc_params)
+            except Exception as e:
+                indices["puckorius"]    = {"error": str(e)}
+            try:
+                indices["larson_skold"] = await calc_svc.calculate_larson_skold(conc_params)
+            except Exception as e:
+                indices["larson_skold"] = {"error": str(e)}
+            try:
+                indices["stiff_davis"]  = await calc_svc.calculate_stiff_davis(conc_params, ionic_s)
+            except Exception as e:
+                indices["stiff_davis"]  = {"error": str(e)}
+            # CCPP from SI of Calcite (approximation when no equilibrium phases)
+            calcite_si = None
+            for k, v in r["saturation_indices"].items():
+                if k.lower() == "calcite":
+                    calcite_si = v.get("SI") if isinstance(v, dict) else float(v)
+                    break
+            if calcite_si is not None:
+                # Approximate CCPP from SI: CCPP ≈ SI × 50 (rough estimate)
+                ccpp_approx = round(calcite_si * 50, 2)
+                if ccpp_approx > 15:
+                    ccpp_interp, ccpp_risk = "Heavy Scale Forming", "High Scale Risk"
+                elif ccpp_approx > 0:
+                    ccpp_interp, ccpp_risk = "Slight Scale Forming", "Moderate Scale Risk"
+                elif ccpp_approx >= -15:
+                    ccpp_interp, ccpp_risk = "Slight Dissolution", "Low Corrosion"
+                else:
+                    ccpp_interp, ccpp_risk = "Corrosive", "Corrosive"
+                indices["ccpp"] = {"ccpp_ppm": ccpp_approx, "interpretation": ccpp_interp, "risk": ccpp_risk}
+            else:
+                indices["ccpp"] = {"ccpp_ppm": None, "interpretation": "N/A", "risk": "N/A"}
+
+            # ── Cooling Tower Water Balance ─────────────────────────────────
+            water_balance: Dict[str, Any] = {}
+            if recirc_rate_gpm > 0 and hot_temp_f > 0 and cold_temp_f > 0:
+                try:
+                    wb = await ct_svc.calculate_tower_water_balance(
+                        recirculation_rate_gpm=recirc_rate_gpm,
+                        hot_water_temp_f=hot_temp_f,
+                        cold_water_temp_f=cold_temp_f,
+                        wet_bulb_temp_f=wet_bulb_f or (cold_temp_f - 10),
+                        coc=coc,
+                        drift_percent=drift_pct,
+                        evaporation_factor_percent=evap_factor,
+                    )
+                    water_balance = {
+                        "blowdown_rate_gpm":  wb["blowdown"]["blowdown_rate_gpm"],
+                        "makeup_rate_gpm":    wb["makeup"]["makeup_rate_gpm"],
+                        "evaporation_gpm":    wb["evaporation"]["evaporation_rate_gpm"],
+                        "range_f":            wb["range"]["range_f"],
+                        "approach_f":         wb["approach"]["approach_f"],
+                        "efficiency_pct":     wb["efficiency"]["efficiency_percent"],
+                        "heat_load_btu_hr":   wb["heat_load"]["heat_load_btu_hr"],
+                        "cooling_tons":       wb["cooling_tons"]["cooling_tons"],
+                    }
+                except Exception as e:
+                    logger.warning(f"Water balance failed for CoC={coc}: {e}")
+                    water_balance = {"error": str(e)}
+            else:
+                water_balance = {"note": "Provide asset_info with recirculationRate, hotWaterTempF, coldWaterTempF"}
+
+            # ── Chemical Feedrate & Cost ────────────────────────────────────
+            chemical_data: Dict[str, Any] = {}
+            bd_gpm = water_balance.get("blowdown_rate_gpm") if isinstance(water_balance.get("blowdown_rate_gpm"), (int, float)) else None
+            if bd_gpm and bd_gpm > 0 and dosage_ppm > 0:
+                try:
+                    day_result  = await ct_svc.calculate_chemical_required_per_day(dosage_ppm, bd_gpm)
+                    lbs_per_day = day_result["chemical_lbs_per_day"]
+                    kg_per_day  = round(lbs_per_day * 0.453592, 3)
+                    kg_per_year = round(kg_per_day * 350, 1)
+                    lbs_per_year = round(lbs_per_day * 350, 1)
+                    chemical_data = {
+                        "product_name":   product_name,
+                        "dosage_ppm":     dosage_ppm,
+                        "lbs_per_day":    lbs_per_day,
+                        "kg_per_day":     kg_per_day,
+                        "lbs_per_year":   lbs_per_year,
+                        "kg_per_year":    kg_per_year,
+                    }
+                    if product_cost_per_lb > 0:
+                        cost_result = await ct_svc.calculate_chemical_cost(dosage_ppm, product_cost_per_lb)
+                        chemical_data["cost_per_million_lbs_bd"] = cost_result["cost_per_million_lbs_bd"]
+                        chemical_data["annual_cost_usd"] = round(lbs_per_year * product_cost_per_lb, 2)
+                except Exception as e:
+                    logger.warning(f"Chemical feedrate failed: {e}")
+                    chemical_data = {"error": str(e)}
+            else:
+                chemical_data = {"note": "Provide asset_info.recirculationRate and dosage_ppm for feedrate"}
+
+            # ── Corrosion Rates ─────────────────────────────────────────────
+            corrosion: Dict[str, Any] = {}
+            si_dict_flat = {
+                k: (v.get("SI") if isinstance(v, dict) else float(v))
+                for k, v in r["saturation_indices"].items()
+            }
+            do_ppm = max(0, 14.6 - 0.41 * temp_c)  # simple DO estimate
+
+            metals_to_calc = metallurgy if metallurgy else ["mild_steel"]
+            for metal in metals_to_calc:
+                metal_key = metal.lower().replace(" ", "_").replace("-", "_")
+                try:
+                    if "mild_steel" in metal_key or "steel" in metal_key:
+                        result_cr = await calc_svc.calculate_mild_steel_corrosion(
+                            conc_params, si_dict_flat, do_ppm, temp_c
+                        )
+                        corrosion["mild_steel"] = result_cr
+                    elif "copper" in metal_key:
+                        result_cr = await calc_svc.calculate_copper_corrosion(
+                            conc_params, si_dict_flat, do_ppm, temp_c, ph
+                        )
+                        corrosion["copper"] = result_cr
+                    elif "admiralty" in metal_key or "brass" in metal_key:
+                        # Admiralty brass ≈ copper with slight adjustment
+                        result_cr = await calc_svc.calculate_copper_corrosion(
+                            conc_params, si_dict_flat, do_ppm, temp_c, ph
+                        )
+                        cr_adj = round(result_cr["cr_mpy"] * 0.85, 2)
+                        corrosion["admiralty_brass"] = {**result_cr, "cr_mpy": cr_adj}
+                except Exception as e:
+                    logger.warning(f"Corrosion calc failed for {metal}: {e}")
+                    corrosion[metal_key] = {"error": str(e)}
+
+            # ── Merge into result ───────────────────────────────────────────
+            enriched.append({
+                **r,
+                "indices":       indices,
+                "water_balance": water_balance,
+                "chemical":      chemical_data,
+                "corrosion":     corrosion,
+            })
+
+        return enriched
+
+    # ── STEP: build interactive chart data (no image, no S3) ────────────────
+    @staticmethod
+    def _build_chart_data(
+        results: List[Dict[str, Any]],
+        salt_id: Optional[str],
+        temp_unit: str,
+    ) -> Dict[str, Any]:
+        """
+        Build frontend-ready structured data for interactive 3D bar chart.
+        Frontend (React/Plotly/Three.js) renders this directly.
+
+        Each point contains:
+          - coc, temperature, ph  → axis values
+          - si                    → bar height (selected salt SI)
+          - color                 → green / yellow / red
+          - all_si                → every mineral SI at this grid point (for hover panel)
+          - ionic_strength, charge_balance_error_pct, activity_of_water
+        """
+        temp_suffix = "°F" if temp_unit.upper() == "F" else "°C"
+
+        def _get_si(si_dict: Dict, target: Optional[str]) -> Optional[float]:
+            if not target:
+                return None
+            if target in si_dict:
+                v = si_dict[target]
+                return v.get("SI") if isinstance(v, dict) else float(v)
+            tl = target.lower()
+            for k, v in si_dict.items():
+                if k.lower() == tl:
+                    return v.get("SI") if isinstance(v, dict) else float(v)
+            return None
+
+        points = []
+        for r in results:
+            temp_display = round(
+                (r["_grid_temp"] * 9/5 + 32) if temp_unit.upper() == "F" else r["_grid_temp"], 2
+            )
+            si_val = _get_si(r["saturation_indices"], salt_id)
+            desc   = r.get("description_of_solution") or {}
+
+            # All minerals at this grid point
+            all_si = {
+                mineral: {
+                    "SI":               info.get("SI") if isinstance(info, dict) else float(info),
+                    "log_IAP":          info.get("log_IAP") if isinstance(info, dict) else None,
+                    "log_K":            info.get("log_K") if isinstance(info, dict) else None,
+                    "chemical_formula": info.get("chemical_formula") if isinstance(info, dict) else None,
+                }
+                for mineral, info in r["saturation_indices"].items()
+            }
+
+            points.append({
+                # ── Axis values ──
+                "coc":         r["_grid_CoC"],
+                "temperature": temp_display,
+                "ph":          r["_grid_pH"],
+                # ── Bar height ──
+                "si":          si_val,
+                # ── Color coding ──
+                "color":       r["color_code"],
+                "color_hex":   _COLOUR_HEX.get(r["color_code"], "#BDC3C7"),
+                # ── Solution properties ──
+                "ionic_strength":            r.get("ionic_strength"),
+                "charge_balance_error_pct":  r.get("charge_balance_error_pct"),
+                "activity_of_water":         desc.get("activity_of_water"),
+                # ── All mineral SI values (for hover/click panel) ──
+                "all_si": all_si,
+                # ── Enriched calculations (from _enrich_grid_points) ──
+                "indices":       r.get("indices", {}),
+                "water_balance": r.get("water_balance", {}),
+                "chemical":      r.get("chemical", {}),
+                "corrosion":     r.get("corrosion", {}),
+                # ── Description of solution (full PHREEQC output) ──
+                "description_of_solution": desc,
+                "distribution_of_species": r.get("distribution_of_species", {}),
+            })
+
+        # Unique axis values (for frontend axis tick generation)
+        unique_coc  = sorted(set(p["coc"]         for p in points))
+        unique_temp = sorted(set(p["temperature"] for p in points))
+        unique_ph   = sorted(set(p["ph"]          for p in points))
+
+        color_labels = {
+            "green":  "Protected",
+            "yellow": "Caution",
+            "red":    "Scale Risk",
+            "error":  "No Data",
+        }
+
+        return {
+            "salt_id":    salt_id,
+            "temp_unit":  temp_suffix,
+            "axes": {
+                "x": {"label": "Cycles of Concentration", "values": unique_coc},
+                "y": {"label": f"Temperature ({temp_suffix})",  "values": unique_temp},
+                "z": {"label": f"Saturation Index ({salt_id or 'SI'})", "unit": "SI"},
+            },
+            "color_map":    _COLOUR_HEX,
+            "color_labels": color_labels,
+            "total_points": len(points),
+            "points":       points,   # ← frontend builds the 3D chart from this
         }
 
     # ── STEP: summary counts ─────────────────────────────────────────────────
@@ -736,14 +1073,13 @@ class SaturationService:
             balance_anion=req.get("balance_anion", "Cl"),
         )
 
-        # 6. Generate graph — if salt_id not found in results, fallback to first available salt
+        # 6. Resolve effective salt (case-insensitive match)
         temp_unit = req.get("temp_unit", "F")
 
-        # Check if salt_id exists in any result, if not use first available
         effective_salt = salt_id
         if results:
-            sample_si  = results[0].get("saturation_indices", {})
-            available  = list(sample_si.keys())
+            sample_si = results[0].get("saturation_indices", {})
+            available = list(sample_si.keys())
             logger.info(f"PHREEQC returned {len(available)} minerals: {available[:15]}")
 
             if salt_id:
@@ -755,26 +1091,27 @@ class SaturationService:
                     )
                     effective_salt = available[0] if available else None
                 else:
-                    # resolve exact case as returned by PHREEQC
                     effective_salt = next(k for k in available if k.lower() == salt_id.lower())
             else:
                 effective_salt = available[0] if available else None
 
-        png = self._generate_graph(results, effective_salt, run_id, temp_unit)
+        # 7. Enrich grid points with indices, water balance, chemical, corrosion
+        logger.info("📊 Enriching grid points with calculations...")
+        try:
+            results = await self._enrich_grid_points(results, raw_water, req)
+        except Exception as e:
+            logger.warning(f"Enrichment failed (non-fatal): {e}")
 
-        # 7. Upload to S3
-        graph_url = self._upload_s3(png, run_id)
+        # 8. Build interactive chart data (no image, no S3)
+        chart_data = self._build_chart_data(results, effective_salt, temp_unit)
 
-        # 8. Build graph_data JSON
-        graph_data = self._build_graph_data(results, salt_id, temp_unit)
-
-        # 9. Summary
+        # 8. Summary
         summary = self._summary(results)
 
-        # 10. Save to DB
+        # 9. Save to DB
         doc = {
             "run_id":             run_id,
-            "salt_id":            salt_id,
+            "salt_id":            effective_salt,
             "salts_of_interest":  salts_of_interest,
             "dosage_ppm":         float(req.get("dosage_ppm", 2.0)),
             "coc_min":            float(req.get("coc_min", 1.0)),
@@ -792,8 +1129,7 @@ class SaturationService:
             "database_used":      db_used,
             "total_grid_points":  len(results),
             "grid_results":       results,
-            "graph_url":          graph_url,
-            "graph_data":         graph_data,
+            "chart_data":         chart_data,
             "summary":            summary,
             "thresholds":         thresholds,
             "base_water_parameters": raw_water,
@@ -854,10 +1190,8 @@ class SaturationService:
             else:
                 r["color_code"] = "error"
 
-        # Generate new graph with resolved salt name
-        png        = self._generate_graph(results, resolved_salt, run_id, temp_unit)
-        graph_url  = self._upload_s3(png, run_id, suffix=f"_{resolved_salt}")
-        graph_data = self._build_graph_data(results, resolved_salt, temp_unit)
+        # Build interactive chart data for new salt
+        chart_data = self._build_chart_data(results, resolved_salt, temp_unit)
         summary    = self._summary(results)
 
         # Update DB
@@ -865,8 +1199,7 @@ class SaturationService:
             {"run_id": run_id},
             {"$set": {
                 "active_salt_id": resolved_salt,
-                "graph_url":      graph_url,
-                "graph_data":     graph_data,
+                "chart_data":     chart_data,
                 "summary":        summary,
             }},
         )
@@ -874,8 +1207,7 @@ class SaturationService:
         return {
             "run_id":     run_id,
             "salt_id":    resolved_salt,
-            "graph_url":  graph_url,
-            "graph_data": graph_data,
+            "chart_data": chart_data,
             "summary":    summary,
         }
 

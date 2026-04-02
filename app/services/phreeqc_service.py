@@ -727,35 +727,45 @@ class PHREEQCService:
     ) -> List[Dict[str, Any]]:
         """
         Parse multi-solution PHREEQC output.
-        PHREEQC output separates solutions with dashes + "Beginning of initial solution calculations"
-        or "Solution composition" headers. We split on those markers.
+        Each SOLUTION block becomes a separate simulation in PHREEQC output,
+        separated by: "----\nReading input data for simulation N.\n----"
         """
         results = []
 
-        # PHREEQC separates each solution with this header line
-        blocks = re.split(r"-+\n?Beginning of initial solution calculations\.\n?-+", output_text)
+        # Split on simulation boundaries — this is the reliable separator
+        # Pattern: dashes, "Reading input data for simulation N.", dashes
+        sim_blocks = re.split(
+            r"-{3,}\s*\nReading input data for simulation \d+\.\s*\n-{3,}",
+            output_text
+        )
 
-        # First block is preamble (database reading), skip it
-        solution_blocks = [b for b in blocks[1:] if b.strip()]
+        # sim_blocks[0] = database reading preamble (skip)
+        # sim_blocks[1] = simulation 1 output
+        # sim_blocks[2] = simulation 2 output ... etc
+        # Last block may be "End of Run" — filter those out
+        solution_blocks = [
+            b for b in sim_blocks[1:]
+            if b.strip() and "Saturation indices" in b
+        ]
 
-        logger.debug(f"Split into {len(solution_blocks)} solution blocks for {len(grid_points)} grid points")
+        logger.debug(f"Split into {len(solution_blocks)} simulation blocks for {len(grid_points)} grid points")
 
         for i, block in enumerate(solution_blocks):
             if i >= len(grid_points):
                 break
-
             parsed = self._parse_phreeqc_output(block)
             parsed["_grid_pH"]   = grid_points[i]["pH"]
             parsed["_grid_CoC"]  = grid_points[i]["CoC"]
             parsed["_grid_temp"] = grid_points[i]["temp"]
             results.append(parsed)
 
-        # If we got fewer results than grid points (parsing issue), fill remaining
-        if len(results) < len(grid_points) and len(results) > 0:
+        # If still fewer results than grid points, raise to trigger sequential fallback
+        if len(results) < len(grid_points):
             logger.warning(
-                f"Got {len(results)} parsed blocks for {len(grid_points)} grid points. "
-                "Remaining points will use last parsed result as approximation."
+                f"_parse_spread_output: got {len(results)} blocks for {len(grid_points)} points. "
+                "Triggering sequential fallback."
             )
+            raise ValueError("Spread parse yielded fewer results than grid points — use sequential")
 
         return results
 
