@@ -729,6 +729,48 @@ class PHREEQCService:
         if desc:
             parsed["description_of_solution"] = desc
 
+        # --- Distribution of Species ---
+        # Format:
+        # "----------------------------Distribution of species----------------------------"
+        # "   Species          Molality    Activity  Molality  Activity     Gamma   cm³/mol"
+        # "   OH-             1.773e-07   1.604e-07    -6.751    -6.795    -0.044     -4.04"
+        dist_species: Dict[str, Any] = {}
+        in_dist = False
+        current_element = None
+        for line in lines:
+            stripped = line.strip()
+            if re.search(r"Distribution of species", stripped, re.IGNORECASE):
+                in_dist = True
+                continue
+            if in_dist:
+                if stripped.startswith("---") or stripped.startswith("Saturation"):
+                    in_dist = False
+                    continue
+                if not stripped or stripped.startswith("Species") or stripped.startswith("Log"):
+                    continue
+                # Element header line (e.g. "Ca            1.996e-03")
+                # Species line (e.g. "   Ca+2            1.908e-03   1.303e-03 ...")
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    try:
+                        name = parts[0]
+                        molality = float(parts[1])
+                        activity = float(parts[2]) if len(parts) > 2 else None
+                        # Detect element header (no charge symbol, short name)
+                        if re.match(r'^[A-Z][a-z]?\(\d\)$|^[A-Z][a-z]?$', name):
+                            current_element = name
+                        else:
+                            entry = {"molality": molality}
+                            if activity is not None:
+                                entry["activity"] = activity
+                            if current_element:
+                                entry["element"] = current_element
+                            dist_species[name] = entry
+                    except (ValueError, IndexError):
+                        pass
+        if dist_species:
+            parsed["distribution_of_species"] = dist_species
+
         return parsed
 
     # ========================================

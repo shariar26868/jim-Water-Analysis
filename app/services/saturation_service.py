@@ -305,13 +305,15 @@ class SaturationService:
 
             colored.append({
                 "_grid_CoC":              res.get("_grid_CoC", 0.0),
-                "_grid_temp":             res.get("_grid_temp", 0.0),   # always °C
+                "_grid_temp":             res.get("_grid_temp", 0.0),
                 "_grid_pH":               res.get("_grid_pH", 0.0),
                 "saturation_indices":     si_detail,
                 "description_of_solution": res.get("description_of_solution"),
+                "distribution_of_species": res.get("distribution_of_species", {}),
                 "color_code":             color,
                 "ionic_strength":         res.get("ionic_strength", 0.0),
                 "charge_balance_error_pct": res.get("charge_balance_error_pct", 0.0),
+                "electrical_balance":     res.get("electrical_balance", 0.0),
             })
 
         return colored, db_name
@@ -769,68 +771,122 @@ class SaturationService:
             conc_params["pH"]          = {"value": ph,     "unit": ""}
             conc_params["Temperature"] = {"value": temp_c, "unit": "C"}
 
-            # ── Deposition Indices ──────────────────────────────────────────
-            # Use PHREEQC Calcite SI directly for LSI (most accurate)
-            calcite_si_phreeqc = None
-            for k, v in r["saturation_indices"].items():
-                if k.lower() == "calcite":
-                    calcite_si_phreeqc = v.get("SI") if isinstance(v, dict) else float(v)
-                    break
+            # ── Deposition Indices — use PHREEQC SI values directly ─────────
+            # Extract key SI values from PHREEQC output
+            def _get_si_val(name: str) -> Optional[float]:
+                for k, v in r["saturation_indices"].items():
+                    if k.lower() == name.lower():
+                        return v.get("SI") if isinstance(v, dict) else float(v)
+                return None
+
+            calcite_si  = _get_si_val("Calcite")
+            gypsum_si   = _get_si_val("Gypsum")
+            dolomite_si = _get_si_val("Dolomite")
+            anhydrite_si= _get_si_val("Anhydrite")
 
             indices: Dict[str, Any] = {}
+
+            # LSI — directly from PHREEQC Calcite SI
+            if calcite_si is not None:
+                lsi_val = round(calcite_si, 3)
+                if lsi_val > 0.5:
+                    lsi_interp, lsi_risk = "Scaling Tendency", "Scale Forming"
+                elif lsi_val > 0:
+                    lsi_interp, lsi_risk = "Slight Scaling Tendency", "Low Scale Risk"
+                elif lsi_val >= -0.5:
+                    lsi_interp, lsi_risk = "Slightly Corrosive", "Low Corrosion"
+                else:
+                    lsi_interp, lsi_risk = "Corrosive", "Corrosive"
+                indices["lsi"] = {
+                    "lsi": lsi_val, "pH_actual": ph,
+                    "interpretation": lsi_interp, "risk": lsi_risk,
+                    "source": "PHREEQC Calcite SI",
+                }
+            else:
+                try:
+                    indices["lsi"] = await calc_svc.calculate_lsi(conc_params)
+                except Exception as e:
+                    indices["lsi"] = {"error": str(e)}
+
+            # RSI (Ryznar) = pH_actual - 2×LSI  (derived from PHREEQC LSI)
+            if calcite_si is not None:
+                lsi_val = calcite_si
+                rsi_val = round(ph - 2 * lsi_val, 3)
+                if rsi_val < 5.5:
+                    rsi_interp, rsi_risk = "Heavy Scaling", "High Scale Risk"
+                elif rsi_val < 6.2:
+                    rsi_interp, rsi_risk = "Moderate Scaling", "Moderate Scale Risk"
+                elif rsi_val < 7.0:
+                    rsi_interp, rsi_risk = "Slight Scaling", "Low Scale Risk"
+                elif rsi_val < 7.5:
+                    rsi_interp, rsi_risk = "Balanced", "Balanced"
+                elif rsi_val < 9.0:
+                    rsi_interp, rsi_risk = "Slight Corrosion", "Low Corrosion"
+                else:
+                    rsi_interp, rsi_risk = "Heavy Corrosion", "High Corrosion"
+                indices["ryznar"] = {
+                    "ri": rsi_val, "pH_actual": ph,
+                    "interpretation": rsi_interp, "risk": rsi_risk,
+                    "source": "Derived from PHREEQC Calcite SI",
+                }
+            else:
+                try:
+                    indices["ryznar"] = await calc_svc.calculate_ryznar(conc_params)
+                except Exception as e:
+                    indices["ryznar"] = {"error": str(e)}
+
+            # PSI (Puckorius) — calculated from conc_params
             try:
-                indices["lsi"] = await calc_svc.calculate_lsi(conc_params)
-                # Override with PHREEQC Calcite SI if available (more accurate)
-                if calcite_si_phreeqc is not None:
-                    lsi_phreeqc = round(calcite_si_phreeqc, 3)
-                    indices["lsi"]["lsi_phreeqc"] = lsi_phreeqc
-                    indices["lsi"]["lsi"] = lsi_phreeqc
-                    indices["lsi"]["source"] = "PHREEQC Calcite SI"
-                    if lsi_phreeqc > 0:
-                        indices["lsi"]["interpretation"] = "Scaling Tendency"
-                        indices["lsi"]["risk"] = "Scale Forming"
-                    elif lsi_phreeqc < 0:
-                        indices["lsi"]["interpretation"] = "Corrosive"
-                        indices["lsi"]["risk"] = "Corrosive"
-                    else:
-                        indices["lsi"]["interpretation"] = "Equilibrium"
-                        indices["lsi"]["risk"] = "Balanced"
+                indices["puckorius"] = await calc_svc.calculate_puckorius(conc_params)
             except Exception as e:
-                indices["lsi"] = {"error": str(e)}
-            try:
-                indices["ryznar"]       = await calc_svc.calculate_ryznar(conc_params)
-            except Exception as e:
-                indices["ryznar"]       = {"error": str(e)}
-            try:
-                indices["puckorius"]    = await calc_svc.calculate_puckorius(conc_params)
-            except Exception as e:
-                indices["puckorius"]    = {"error": str(e)}
+                indices["puckorius"] = {"error": str(e)}
+
+            # Larson-Skold — from conc_params (Cl, SO4, HCO3)
             try:
                 indices["larson_skold"] = await calc_svc.calculate_larson_skold(conc_params)
             except Exception as e:
                 indices["larson_skold"] = {"error": str(e)}
+
+            # Stiff & Davis — from conc_params + ionic strength
             try:
-                indices["stiff_davis"]  = await calc_svc.calculate_stiff_davis(conc_params, ionic_s)
+                indices["stiff_davis"] = await calc_svc.calculate_stiff_davis(conc_params, ionic_s)
             except Exception as e:
-                indices["stiff_davis"]  = {"error": str(e)}
-            # CCPP from SI of Calcite (approximation when no equilibrium phases)
-            calcite_si = None
-            for k, v in r["saturation_indices"].items():
-                if k.lower() == "calcite":
-                    calcite_si = v.get("SI") if isinstance(v, dict) else float(v)
-                    break
-            if calcite_si is not None:
-                # Approximate CCPP from SI: CCPP ≈ SI × 50 (rough estimate)
-                ccpp_approx = round(calcite_si * 50, 2)
-                if ccpp_approx > 15:
+                indices["stiff_davis"] = {"error": str(e)}
+
+            # CCPP — from Calcite SI (PHREEQC)
+            # CCPP (mg/L as CaCO3) ≈ Calcite SI × 50 × [Ca²⁺] correction
+            # More accurate: use equilibrium phases if available
+            eq_phases = r.get("equilibrium_phases", {})
+            calcite_moles = eq_phases.get("Calcite")
+            if calcite_moles is not None:
+                ccpp_ppm = round(calcite_moles * 100.09 * 1000, 2)
+            elif calcite_si is not None:
+                # Approximate: CCPP ≈ SI × Ca_conc_as_CaCO3 / 10
+                ca_val = 0.0
+                for k, v in base_water_parameters.items():
+                    if k.lower() in ("calcium", "ca"):
+                        ca_val = float(v.get("value", 0) if isinstance(v, dict) else v) * coc
+                        break
+                ca_as_caco3 = ca_val * (100.09 / 40.08)
+                ccpp_ppm = round(calcite_si * ca_as_caco3 / 10, 2)
+            else:
+                ccpp_ppm = None
+
+            if ccpp_ppm is not None:
+                if ccpp_ppm > 15:
                     ccpp_interp, ccpp_risk = "Heavy Scale Forming", "High Scale Risk"
-                elif ccpp_approx > 0:
+                elif ccpp_ppm > 0:
                     ccpp_interp, ccpp_risk = "Slight Scale Forming", "Moderate Scale Risk"
-                elif ccpp_approx >= -15:
+                elif ccpp_ppm >= -15:
                     ccpp_interp, ccpp_risk = "Slight Dissolution", "Low Corrosion"
                 else:
                     ccpp_interp, ccpp_risk = "Corrosive", "Corrosive"
-                indices["ccpp"] = {"ccpp_ppm": ccpp_approx, "interpretation": ccpp_interp, "risk": ccpp_risk}
+                indices["ccpp"] = {
+                    "ccpp_ppm": ccpp_ppm,
+                    "interpretation": ccpp_interp,
+                    "risk": ccpp_risk,
+                    "source": "PHREEQC equilibrium phases" if calcite_moles is not None else "Estimated from Calcite SI",
+                }
             else:
                 indices["ccpp"] = {"ccpp_ppm": None, "interpretation": "N/A", "risk": "N/A"}
 
@@ -897,31 +953,34 @@ class SaturationService:
                 k: (v.get("SI") if isinstance(v, dict) else float(v))
                 for k, v in r["saturation_indices"].items()
             }
-            do_ppm = max(0, 14.6 - 0.41 * temp_c)  # simple DO estimate
+            # DO estimate: Henry's law approximation for open cooling water
+            do_ppm = max(0.0, round(14.62 - 0.3898 * temp_c + 0.006969 * temp_c**2 - 0.00005896 * temp_c**3, 2))
 
-            metals_to_calc = metallurgy if metallurgy else ["mild_steel"]
-            for metal in metals_to_calc:
-                metal_key = metal.lower().replace(" ", "_").replace("-", "_")
+            # Always calculate for standard metals, plus any in metallurgy list
+            metals_to_calc = list(set(["mild_steel", "copper", "admiralty_brass"] + [
+                m.lower().replace(" ", "_").replace("-", "_") for m in metallurgy
+            ]))
+
+            for metal_key in metals_to_calc:
                 try:
                     if "mild_steel" in metal_key or "steel" in metal_key:
                         result_cr = await calc_svc.calculate_mild_steel_corrosion(
                             conc_params, si_dict_flat, do_ppm, temp_c
                         )
-                        corrosion["mild_steel"] = result_cr
+                        corrosion["mild_steel"] = {**result_cr, "do_ppm_used": do_ppm}
                     elif "copper" in metal_key:
                         result_cr = await calc_svc.calculate_copper_corrosion(
                             conc_params, si_dict_flat, do_ppm, temp_c, ph
                         )
-                        corrosion["copper"] = result_cr
+                        corrosion["copper"] = {**result_cr, "do_ppm_used": do_ppm}
                     elif "admiralty" in metal_key or "brass" in metal_key:
-                        # Admiralty brass ≈ copper with slight adjustment
                         result_cr = await calc_svc.calculate_copper_corrosion(
                             conc_params, si_dict_flat, do_ppm, temp_c, ph
                         )
                         cr_adj = round(result_cr["cr_mpy"] * 0.85, 2)
-                        corrosion["admiralty_brass"] = {**result_cr, "cr_mpy": cr_adj}
+                        corrosion["admiralty_brass"] = {**result_cr, "cr_mpy": cr_adj, "do_ppm_used": do_ppm}
                 except Exception as e:
-                    logger.warning(f"Corrosion calc failed for {metal}: {e}")
+                    logger.warning(f"Corrosion calc failed for {metal_key}: {e}")
                     corrosion[metal_key] = {"error": str(e)}
 
             # ── Merge into result ───────────────────────────────────────────
@@ -1010,6 +1069,7 @@ class SaturationService:
                 # ── Description of solution (full PHREEQC output) ──
                 "description_of_solution": desc,
                 "distribution_of_species": r.get("distribution_of_species", {}),
+                "electrical_balance":      r.get("electrical_balance", 0.0),
             })
 
         # Unique axis values (for frontend axis tick generation)
@@ -1070,6 +1130,24 @@ class SaturationService:
             logger.warning(f"pH value {base_ph} is outside realistic range (4–11), defaulting to 7.0")
             base_ph = 7.0
             mapped["pH"] = 7.0
+
+        # Validate temperature unit consistency
+        temp_min = float(req.get("temp_min") or 25.0)
+        temp_max = float(req.get("temp_max") or 60.0)
+        temp_unit_req = req.get("temp_unit", "C").upper()
+        if temp_unit_req == "F":
+            # Sanity check: F values should be > 32
+            if temp_min < 32 or temp_max < 32:
+                logger.warning(f"temp_unit=F but temp_min={temp_min}, temp_max={temp_max} look like Celsius. Auto-correcting to C.")
+                # Override to treat as Celsius
+                req = dict(req)
+                req["temp_unit"] = "C"
+        elif temp_unit_req == "C":
+            # Sanity check: C values should be < 200
+            if temp_min > 200 or temp_max > 200:
+                logger.warning(f"temp_unit=C but temp_min={temp_min}, temp_max={temp_max} look like Fahrenheit. Auto-correcting to F.")
+                req = dict(req)
+                req["temp_unit"] = "F"
 
         # 2. pH adjustment
         mapped = _apply_ph_adjustment(mapped, req.get("adjustment_chemical"))

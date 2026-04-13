@@ -1,0 +1,507 @@
+SOLUTION 1  # CoC=1, Temp=110F/43.3C, pH=6.5
+    pH    6.50
+    temp  43.3
+    Ca           0.349800  as Ca
+    Mg           0.199918  as Mg
+    Cl           0.423131  as Cl
+    S(6)         0.208203  as SO4
+    Alkalinity   0.573582  as HCO3
+    Si           0.266312  as SiO2
+
+SOLUTION 2  # CoC=1, Temp=120F/48.9C, pH=6.5
+    pH    6.50
+    temp  48.9
+    Ca           0.349800  as Ca
+    Mg           0.199918  as Mg
+    Cl           0.423131  as Cl
+    S(6)         0.208203  as SO4
+    Alkalinity   0.573582  as HCO3
+    Si           0.266312  as SiO2
+
+SOLUTION 3  # CoC=1, Temp=130F/54.4C, pH=6.5
+    pH    6.50
+    temp  54.4
+    Ca           0.349800  as Ca
+    Mg           0.199918  as Mg
+    Cl           0.423131  as Cl
+    S(6)         0.208203  as SO4
+    Alkalinity   0.573582  as HCO3
+    Si           0.266312  as SiO2
+
+SOLUTION 4  # CoC=1, Temp=140F/60.0C, pH=6.5
+    pH    6.50
+    temp  60.0
+    Ca           0.349800  as Ca
+    Mg           0.199918  as Mg
+    Cl           0.423131  as Cl
+    S(6)         0.208203  as SO4
+    Alkalinity   0.573582  as HCO3
+    Si           0.266312  as SiO2
+
+SOLUTION 5  # CoC=1, Temp=150F/65.6C, pH=6.5
+    pH    6.50
+    temp  65.6
+    Ca           0.349800  as Ca
+    Mg           0.199918  as Mg
+    Cl           0.423131  as Cl
+    S(6)         0.208203  as SO4
+    Alkalinity   0.573582  as HCO3
+    Si           0.266312  as SiO2
+
+SOLUTION 6  # CoC=2, Temp=110F/43.3C, pH=6.5
+    pH    6.50
+    temp  43.3
+    Ca           0.699601  as Ca
+    Mg           0.399835  as Mg
+    Cl           0.846262  as Cl
+    S(6)         0.416406  as SO4
+    Alkalinity   1.147165  as HCO3
+    Si           0.532623  as SiO2
+
+SOLUTION 7  # CoC=2, Temp=120F/48.9C, pH=6.5
+    pH    6.50
+    temp  48.9
+    Ca           0.699601  as Ca
+    Mg           0.399835  as Mg
+    Cl           0.846262  as Cl
+    S(6)         0.416406  as SO4
+    Alkalinity   1.147165  as HCO3
+    Si           0.532623  as SiO2
+
+SOLUTION 8  # CoC=2, Temp=130F/54.4C, pH=6.5
+    pH    6.50
+    temp  54.4
+    Ca           0.699601  as Ca
+    Mg           0.399835  as Mg
+    Cl           0.846262  as Cl
+    S(6)         0.416406  as SO4
+    Alkalinity   1.147165  as HCO3
+    Si           0.532623  as SiO2
+
+SOLUTION 9  # CoC=2, Temp=140F/60.0C, pH=6.5
+    pH    6.50
+    temp  60.0
+    Ca           0.699601  as Ca
+    Mg           0.399835  as Mg
+    Cl           0.846262  as Cl
+    S(6)         0.416406  as SO4
+    Alkalinity   1.147165  as HCO3
+    Si           0.532623  as SiO2
+
+SOLUTION 10  # CoC=2, Temp=150F/65.6C, pH=6.5
+    pH    6.50
+    temp  65.6
+    Ca           0.699601  as Ca
+    Mg           0.399835  as Mg
+    Cl           0.846262  as Cl
+    S(6)         0.416406  as SO4
+    Alkalinity   1.147165  as HCO3
+    Si           0.532623  as SiO2
+
+SOLUTION 11  # CoC=3, Temp=110F/43.3C, pH=6.5
+    pH    6.50
+    temp  43.3
+    Ca           1.049401  as Ca
+    Mg           0.599753  as Mg
+    Cl           1.269394  as Cl
+    S(6)         0.624610  as SO4
+    Alkalinity   1.720747  as HCO3
+    Si           0.798935  as SiO2
+
+SOLUTION 12  # CoC=3, Temp=120F/48.9C, pH=6.5
+    pH    6.50
+    temp  48.9
+    Ca           1.049401  as Ca
+    Mg           0.599753  as Mg
+    Cl           1.269394  as Cl
+    S(6)         0.624610  as SO4
+    Alkalinity   1.720747  as HCO3
+    Si           0.798935  as SiO2
+
+SOLUTION 13  # CoC=3, Temp=130F/54.4C, pH=6.5
+    pH    6.50
+    temp  54.4
+    Ca           1.049401  as Ca
+    Mg           0.599753  as Mg
+    Cl           1.269394  as Cl
+    S(6)         0.624610  as SO4
+    Alkalinity   1.720747  as HCO3
+    Si           0.798935  as SiO2
+
+SOLUTION 14  # CoC=3, Temp=140F/60.0C, pH=6.5
+    pH    6.50
+    temp  60.0
+    Ca           1.049401  as Ca
+    Mg           0.599753  as Mg
+    Cl           1.269394  as Cl
+    S(6)         0.624610  as SO4
+    Alkalinity   1.720747  as HCO3
+    Si           0.798935  as SiO2
+
+SOLUTION 15  # CoC=3, Temp=150F/65.6C, pH=6.5
+    pH    6.50
+    temp  65.6
+    Ca           1.049401  as Ca
+    Mg           0.599753  as Mg
+    Cl           1.269394  as Cl
+    S(6)         0.624610  as SO4
+    Alkalinity   1.720747  as HCO3
+    Si           0.798935  as SiO2
+
+SOLUTION 16  # CoC=4, Temp=110F/43.3C, pH=6.5
+    pH    6.50
+    temp  43.3
+    Ca           1.399202  as Ca
+    Mg           0.799671  as Mg
+    Cl           1.692525  as Cl
+    S(6)         0.832813  as SO4
+    Alkalinity   2.294330  as HCO3
+    Si           1.065246  as SiO2
+
+SOLUTION 17  # CoC=4, Temp=120F/48.9C, pH=6.5
+    pH    6.50
+    temp  48.9
+    Ca           1.399202  as Ca
+    Mg           0.799671  as Mg
+    Cl           1.692525  as Cl
+    S(6)         0.832813  as SO4
+    Alkalinity   2.294330  as HCO3
+    Si           1.065246  as SiO2
+
+SOLUTION 18  # CoC=4, Temp=130F/54.4C, pH=6.5
+    pH    6.50
+    temp  54.4
+    Ca           1.399202  as Ca
+    Mg           0.799671  as Mg
+    Cl           1.692525  as Cl
+    S(6)         0.832813  as SO4
+    Alkalinity   2.294330  as HCO3
+    Si           1.065246  as SiO2
+
+SOLUTION 19  # CoC=4, Temp=140F/60.0C, pH=6.5
+    pH    6.50
+    temp  60.0
+    Ca           1.399202  as Ca
+    Mg           0.799671  as Mg
+    Cl           1.692525  as Cl
+    S(6)         0.832813  as SO4
+    Alkalinity   2.294330  as HCO3
+    Si           1.065246  as SiO2
+
+SOLUTION 20  # CoC=4, Temp=150F/65.6C, pH=6.5
+    pH    6.50
+    temp  65.6
+    Ca           1.399202  as Ca
+    Mg           0.799671  as Mg
+    Cl           1.692525  as Cl
+    S(6)         0.832813  as SO4
+    Alkalinity   2.294330  as HCO3
+    Si           1.065246  as SiO2
+
+SOLUTION 21  # CoC=5, Temp=110F/43.3C, pH=6.5
+    pH    6.50
+    temp  43.3
+    Ca           1.749002  as Ca
+    Mg           0.999589  as Mg
+    Cl           2.115656  as Cl
+    S(6)         1.041016  as SO4
+    Alkalinity   2.867912  as HCO3
+    Si           1.331558  as SiO2
+
+SOLUTION 22  # CoC=5, Temp=120F/48.9C, pH=6.5
+    pH    6.50
+    temp  48.9
+    Ca           1.749002  as Ca
+    Mg           0.999589  as Mg
+    Cl           2.115656  as Cl
+    S(6)         1.041016  as SO4
+    Alkalinity   2.867912  as HCO3
+    Si           1.331558  as SiO2
+
+SOLUTION 23  # CoC=5, Temp=130F/54.4C, pH=6.5
+    pH    6.50
+    temp  54.4
+    Ca           1.749002  as Ca
+    Mg           0.999589  as Mg
+    Cl           2.115656  as Cl
+    S(6)         1.041016  as SO4
+    Alkalinity   2.867912  as HCO3
+    Si           1.331558  as SiO2
+
+SOLUTION 24  # CoC=5, Temp=140F/60.0C, pH=6.5
+    pH    6.50
+    temp  60.0
+    Ca           1.749002  as Ca
+    Mg           0.999589  as Mg
+    Cl           2.115656  as Cl
+    S(6)         1.041016  as SO4
+    Alkalinity   2.867912  as HCO3
+    Si           1.331558  as SiO2
+
+SOLUTION 25  # CoC=5, Temp=150F/65.6C, pH=6.5
+    pH    6.50
+    temp  65.6
+    Ca           1.749002  as Ca
+    Mg           0.999589  as Mg
+    Cl           2.115656  as Cl
+    S(6)         1.041016  as SO4
+    Alkalinity   2.867912  as HCO3
+    Si           1.331558  as SiO2
+
+SOLUTION 26  # CoC=6, Temp=110F/43.3C, pH=6.5
+    pH    6.50
+    temp  43.3
+    Ca           2.098802  as Ca
+    Mg           1.199506  as Mg
+    Cl           2.538787  as Cl
+    S(6)         1.249219  as SO4
+    Alkalinity   3.441495  as HCO3
+    Si           1.597870  as SiO2
+
+SOLUTION 27  # CoC=6, Temp=120F/48.9C, pH=6.5
+    pH    6.50
+    temp  48.9
+    Ca           2.098802  as Ca
+    Mg           1.199506  as Mg
+    Cl           2.538787  as Cl
+    S(6)         1.249219  as SO4
+    Alkalinity   3.441495  as HCO3
+    Si           1.597870  as SiO2
+
+SOLUTION 28  # CoC=6, Temp=130F/54.4C, pH=6.5
+    pH    6.50
+    temp  54.4
+    Ca           2.098802  as Ca
+    Mg           1.199506  as Mg
+    Cl           2.538787  as Cl
+    S(6)         1.249219  as SO4
+    Alkalinity   3.441495  as HCO3
+    Si           1.597870  as SiO2
+
+SOLUTION 29  # CoC=6, Temp=140F/60.0C, pH=6.5
+    pH    6.50
+    temp  60.0
+    Ca           2.098802  as Ca
+    Mg           1.199506  as Mg
+    Cl           2.538787  as Cl
+    S(6)         1.249219  as SO4
+    Alkalinity   3.441495  as HCO3
+    Si           1.597870  as SiO2
+
+SOLUTION 30  # CoC=6, Temp=150F/65.6C, pH=6.5
+    pH    6.50
+    temp  65.6
+    Ca           2.098802  as Ca
+    Mg           1.199506  as Mg
+    Cl           2.538787  as Cl
+    S(6)         1.249219  as SO4
+    Alkalinity   3.441495  as HCO3
+    Si           1.597870  as SiO2
+
+SOLUTION 31  # CoC=7, Temp=110F/43.3C, pH=6.5
+    pH    6.50
+    temp  43.3
+    Ca           2.448603  as Ca
+    Mg           1.399424  as Mg
+    Cl           2.961918  as Cl
+    S(6)         1.457422  as SO4
+    Alkalinity   4.015077  as HCO3
+    Si           1.864181  as SiO2
+
+SOLUTION 32  # CoC=7, Temp=120F/48.9C, pH=6.5
+    pH    6.50
+    temp  48.9
+    Ca           2.448603  as Ca
+    Mg           1.399424  as Mg
+    Cl           2.961918  as Cl
+    S(6)         1.457422  as SO4
+    Alkalinity   4.015077  as HCO3
+    Si           1.864181  as SiO2
+
+SOLUTION 33  # CoC=7, Temp=130F/54.4C, pH=6.5
+    pH    6.50
+    temp  54.4
+    Ca           2.448603  as Ca
+    Mg           1.399424  as Mg
+    Cl           2.961918  as Cl
+    S(6)         1.457422  as SO4
+    Alkalinity   4.015077  as HCO3
+    Si           1.864181  as SiO2
+
+SOLUTION 34  # CoC=7, Temp=140F/60.0C, pH=6.5
+    pH    6.50
+    temp  60.0
+    Ca           2.448603  as Ca
+    Mg           1.399424  as Mg
+    Cl           2.961918  as Cl
+    S(6)         1.457422  as SO4
+    Alkalinity   4.015077  as HCO3
+    Si           1.864181  as SiO2
+
+SOLUTION 35  # CoC=7, Temp=150F/65.6C, pH=6.5
+    pH    6.50
+    temp  65.6
+    Ca           2.448603  as Ca
+    Mg           1.399424  as Mg
+    Cl           2.961918  as Cl
+    S(6)         1.457422  as SO4
+    Alkalinity   4.015077  as HCO3
+    Si           1.864181  as SiO2
+
+SOLUTION 36  # CoC=8, Temp=110F/43.3C, pH=6.5
+    pH    6.50
+    temp  43.3
+    Ca           2.798403  as Ca
+    Mg           1.599342  as Mg
+    Cl           3.385049  as Cl
+    S(6)         1.665626  as SO4
+    Alkalinity   4.588659  as HCO3
+    Si           2.130493  as SiO2
+
+SOLUTION 37  # CoC=8, Temp=120F/48.9C, pH=6.5
+    pH    6.50
+    temp  48.9
+    Ca           2.798403  as Ca
+    Mg           1.599342  as Mg
+    Cl           3.385049  as Cl
+    S(6)         1.665626  as SO4
+    Alkalinity   4.588659  as HCO3
+    Si           2.130493  as SiO2
+
+SOLUTION 38  # CoC=8, Temp=130F/54.4C, pH=6.5
+    pH    6.50
+    temp  54.4
+    Ca           2.798403  as Ca
+    Mg           1.599342  as Mg
+    Cl           3.385049  as Cl
+    S(6)         1.665626  as SO4
+    Alkalinity   4.588659  as HCO3
+    Si           2.130493  as SiO2
+
+SOLUTION 39  # CoC=8, Temp=140F/60.0C, pH=6.5
+    pH    6.50
+    temp  60.0
+    Ca           2.798403  as Ca
+    Mg           1.599342  as Mg
+    Cl           3.385049  as Cl
+    S(6)         1.665626  as SO4
+    Alkalinity   4.588659  as HCO3
+    Si           2.130493  as SiO2
+
+SOLUTION 40  # CoC=8, Temp=150F/65.6C, pH=6.5
+    pH    6.50
+    temp  65.6
+    Ca           2.798403  as Ca
+    Mg           1.599342  as Mg
+    Cl           3.385049  as Cl
+    S(6)         1.665626  as SO4
+    Alkalinity   4.588659  as HCO3
+    Si           2.130493  as SiO2
+
+SOLUTION 41  # CoC=9, Temp=110F/43.3C, pH=6.5
+    pH    6.50
+    temp  43.3
+    Ca           3.148204  as Ca
+    Mg           1.799260  as Mg
+    Cl           3.808181  as Cl
+    S(6)         1.873829  as SO4
+    Alkalinity   5.162242  as HCO3
+    Si           2.396804  as SiO2
+
+SOLUTION 42  # CoC=9, Temp=120F/48.9C, pH=6.5
+    pH    6.50
+    temp  48.9
+    Ca           3.148204  as Ca
+    Mg           1.799260  as Mg
+    Cl           3.808181  as Cl
+    S(6)         1.873829  as SO4
+    Alkalinity   5.162242  as HCO3
+    Si           2.396804  as SiO2
+
+SOLUTION 43  # CoC=9, Temp=130F/54.4C, pH=6.5
+    pH    6.50
+    temp  54.4
+    Ca           3.148204  as Ca
+    Mg           1.799260  as Mg
+    Cl           3.808181  as Cl
+    S(6)         1.873829  as SO4
+    Alkalinity   5.162242  as HCO3
+    Si           2.396804  as SiO2
+
+SOLUTION 44  # CoC=9, Temp=140F/60.0C, pH=6.5
+    pH    6.50
+    temp  60.0
+    Ca           3.148204  as Ca
+    Mg           1.799260  as Mg
+    Cl           3.808181  as Cl
+    S(6)         1.873829  as SO4
+    Alkalinity   5.162242  as HCO3
+    Si           2.396804  as SiO2
+
+SOLUTION 45  # CoC=9, Temp=150F/65.6C, pH=6.5
+    pH    6.50
+    temp  65.6
+    Ca           3.148204  as Ca
+    Mg           1.799260  as Mg
+    Cl           3.808181  as Cl
+    S(6)         1.873829  as SO4
+    Alkalinity   5.162242  as HCO3
+    Si           2.396804  as SiO2
+
+SOLUTION 46  # CoC=10, Temp=110F/43.3C, pH=6.5
+    pH    6.50
+    temp  43.3
+    Ca           3.498004  as Ca
+    Mg           1.999177  as Mg
+    Cl           4.231312  as Cl
+    S(6)         2.082032  as SO4
+    Alkalinity   5.735824  as HCO3
+    Si           2.663116  as SiO2
+
+SOLUTION 47  # CoC=10, Temp=120F/48.9C, pH=6.5
+    pH    6.50
+    temp  48.9
+    Ca           3.498004  as Ca
+    Mg           1.999177  as Mg
+    Cl           4.231312  as Cl
+    S(6)         2.082032  as SO4
+    Alkalinity   5.735824  as HCO3
+    Si           2.663116  as SiO2
+
+SOLUTION 48  # CoC=10, Temp=130F/54.4C, pH=6.5
+    pH    6.50
+    temp  54.4
+    Ca           3.498004  as Ca
+    Mg           1.999177  as Mg
+    Cl           4.231312  as Cl
+    S(6)         2.082032  as SO4
+    Alkalinity   5.735824  as HCO3
+    Si           2.663116  as SiO2
+
+SOLUTION 49  # CoC=10, Temp=140F/60.0C, pH=6.5
+    pH    6.50
+    temp  60.0
+    Ca           3.498004  as Ca
+    Mg           1.999177  as Mg
+    Cl           4.231312  as Cl
+    S(6)         2.082032  as SO4
+    Alkalinity   5.735824  as HCO3
+    Si           2.663116  as SiO2
+
+SOLUTION 50  # CoC=10, Temp=150F/65.6C, pH=6.5
+    pH    6.50
+    temp  65.6
+    Ca           3.498004  as Ca
+    Mg           1.999177  as Mg
+    Cl           4.231312  as Cl
+    S(6)         2.082032  as SO4
+    Alkalinity   5.735824  as HCO3
+    Si           2.663116  as SiO2
+
+SELECTED_OUTPUT
+    -saturation_indices
+    -molalities
+    -charge_balance
+    -ionic_strength
+
+END
