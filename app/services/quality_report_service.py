@@ -50,9 +50,37 @@ class QualityReportService:
             logger.info(f"✅ Quality report generated - WQI: {wqi['score']}, Compliance: {compliance_score['percentage']}")
             
             return {
-                "water_quality_index": wqi,
-                "compliance_score": compliance_score,
-                "risk_factor": risk_factor
+                "water_quality_index": {
+                    **wqi,
+                    "title":       "Overall Water Quality Score",
+                    "description": (
+                        "A composite score (0–100) calculated from key parameters "
+                        "(pH, TDS, Hardness, Chloride, Sulfate, Nitrate, Iron, etc.) "
+                        "weighted against WHO drinking water guidelines. "
+                        "100 = all parameters at ideal levels. "
+                        "Score drops as parameters deviate from ideal values."
+                    ),
+                },
+                "compliance_score": {
+                    **compliance_score,
+                    "title":       "Regulatory Compliance",
+                    "description": (
+                        "Percentage of tested parameters that pass the applicable "
+                        "drinking water standard (WHO / EPA / EU-DWD depending on location). "
+                        "100% = all tested parameters within regulatory limits."
+                    ),
+                },
+                "risk_factor": {
+                    **risk_factor,
+                    "title":       "Contamination Risk Level",
+                    "description": (
+                        "Overall contamination risk score (0–10) based on detected "
+                        "heavy metals, organic compounds, and microbiological indicators. "
+                        "0 = no detected contaminants. "
+                        "10 = critical contamination levels. "
+                        "Weighted: Critical×10 + High×7 + Medium×4 + Low×1."
+                    ),
+                },
             }
             
         except Exception as e:

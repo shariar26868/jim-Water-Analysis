@@ -242,6 +242,7 @@ class PHREEQCService:
 
         db = database or self.phreeqc_dat
         balanced = dict(water_params)
+        adjustments = []   # track every adjustment made
 
         for iteration in range(max_iterations):
             logger.info(f"⚖️  Ion balance iteration {iteration + 1}/{max_iterations}")
@@ -259,23 +260,36 @@ class PHREEQCService:
                 balanced["_ion_balanced"]         = True
                 balanced["_balance_iterations"]   = iteration + 1
                 balanced["_charge_balance_error"] = error_pct
+                balanced["_ion_adjustments"]      = adjustments
                 return balanced
 
             # Adjust ion per client formula
             if elec_balance < 0:
-                # Adjust cation (Na / K)
                 ion       = cation_ion
-                charge    = self.ION_PROPERTIES[ion]["charge"]   # +1 or +2
+                charge    = self.ION_PROPERTIES[ion]["charge"]
                 current   = _get_param_value(balanced, ion) or 0.0
                 new_value = (abs(elec_balance) / abs(charge)) + current
+                direction = "increased"
                 logger.info(f"   Adjusting cation {ion}: {current:.4f} → {new_value:.4f}")
             else:
-                # Adjust anion (Cl / SO4)
                 ion       = anion_ion
-                charge    = abs(self.ION_PROPERTIES[ion]["charge"])   # 1 or 2
+                charge    = abs(self.ION_PROPERTIES[ion]["charge"])
                 current   = _get_param_value(balanced, ion) or 0.0
                 new_value = (abs(elec_balance) / charge) + current
+                direction = "increased"
                 logger.info(f"   Adjusting anion  {ion}: {current:.4f} → {new_value:.4f}")
+
+            adjustments.append({
+                "ion":              ion,
+                "ion_type":         "cation" if elec_balance < 0 else "anion",
+                "original_mmol":    round(current, 6),
+                "adjusted_mmol":    round(new_value, 6),
+                "delta_mmol":       round(new_value - current, 6),
+                "direction":        direction,
+                "iteration":        iteration + 1,
+                "electrical_balance_before": round(elec_balance, 6),
+                "charge_error_pct_before":   round(error_pct, 2),
+            })
 
             balanced = _set_param_value(balanced, ion, new_value)
 

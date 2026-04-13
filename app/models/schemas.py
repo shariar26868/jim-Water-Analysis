@@ -965,9 +965,17 @@ class WaterAnalysisResponse(BaseModel):
     corrosion_predictions: Optional[CorrosionPredictions] = None
     
     # Metadata
-    sample_location: Optional[str] = None
-    sample_date: Optional[datetime] = None
-    created_at: datetime
+    sample_location:    Optional[str]      = None
+    sample_date:        Optional[datetime] = None
+    analysis_date:      Optional[datetime] = None
+    water_use_type:     Optional[str]      = None   # makeup_water | cooling_tower_water | process_water
+    water_source_type:  Optional[str]      = None   # city | surface | well | sea
+    location:           Optional[str]      = None
+    report_name:        Optional[str]      = None
+    customer_id:        Optional[str]      = None
+    customer_name:      Optional[str]      = None
+    asset_id:           Optional[str]      = None
+    created_at:         datetime
     
     @validator('sample_date', pre=True)
     def parse_sample_date(cls, v):
@@ -1099,9 +1107,23 @@ class CorrosionPredictionRequest(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     """Request for water analysis (file uploaded separately)"""
-    sample_location: Optional[str] = None
-    sample_date: Optional[datetime] = None
-    custom_standards: Optional[List[str]] = None
+    sample_location:    Optional[str]      = None
+    sample_date:        Optional[datetime] = None
+    analysis_date:      Optional[datetime] = None   # date lab ran the analysis
+    custom_standards:   Optional[List[str]] = None
+
+    # Water source classification
+    water_use_type:     Optional[str]      = None   # "makeup_water" | "cooling_tower_water" | "process_water"
+    water_source_type:  Optional[str]      = None   # "city" | "surface" | "well" | "sea"
+
+    # Location for compliance standard
+    location:           Optional[str]      = None   # "US" | "EU" | "AU" | "WHO"
+
+    # Report metadata
+    report_name:        Optional[str]      = None
+    customer_id:        Optional[str]      = None
+    customer_name:      Optional[str]      = None
+    asset_id:           Optional[str]      = None
 
 
 # class RecalculateRequest(BaseModel):
@@ -1290,6 +1312,15 @@ class SaturationRunRequest(BaseModel):
 
     # Asset metadata (informational only)
     asset_info:           Optional[AssetInfo] = None
+
+    # Location for compliance standard selection (e.g. "US", "EU", "AU", "WHO")
+    location:             Optional[str]       = None
+
+    # Report metadata
+    report_name:          Optional[str]       = None   # e.g. "Q1 2026 Tower A Analysis"
+    customer_id:          Optional[str]       = None
+    customer_name:        Optional[str]       = None
+    asset_id:             Optional[str]       = None
 
 
 class SaturationSwitchSaltRequest(BaseModel):

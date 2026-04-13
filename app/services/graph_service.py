@@ -50,120 +50,161 @@ class GraphService:
         self._status_cache = {}
     
     async def create_parameter_graph(
-        self, 
+        self,
         parameters: Dict[str, Any],
         chemical_status: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Create parameter comparison bar graph
-        100% Dynamic - uses AI to determine colors
+        Create high-quality parameter comparison bar chart.
+        Dark theme, color-coded by status, reference lines, clean typography.
         """
         try:
-            logger.info("📊 Creating parameter comparison graph (AI-powered)")
-            
-            # Get template
-            template = await db.get_graph_template("parameter_comparison_bar")
-            if not template:
-                template = self._get_default_template()
-            
-            # Extract numeric parameters
-            numeric_params = {}
+            logger.info("📊 Creating parameter comparison graph")
+
+            # ── Extract numeric parameters ────────────────────────────────────
+            SKIP_PARAMS = {"temperature", "temp", "tds", "conductivity", "ec", "ph"}
+            numeric_params: Dict[str, float] = {}
+            units_map: Dict[str, str] = {}
+
             for param_name, param_data in parameters.items():
-                value = param_data.get("value")
-                if isinstance(value, (int, float)):
-                    numeric_params[param_name] = value
-            
+                if param_name.lower().replace(" ", "_") in SKIP_PARAMS:
+                    continue
+                value = param_data.get("value") if isinstance(param_data, dict) else param_data
+                unit  = param_data.get("unit", "mg/L") if isinstance(param_data, dict) else "mg/L"
+                if isinstance(value, (int, float)) and value > 0:
+                    numeric_params[param_name] = float(value)
+                    units_map[param_name] = unit or "mg/L"
+
             if not numeric_params:
-                raise Exception("No numeric parameters found")
-            
-            # ✅ Determine status and color dynamically
-            logger.info(f"🤖 Evaluating {len(numeric_params)} parameters with AI...")
-            
-            color_mapping = {}
-            status_mapping = {}
-            
+                raise Exception("No numeric parameters found for graph")
+
+            # ── Determine status / color per parameter ────────────────────────
+            color_mapping: Dict[str, str] = {}
+            status_mapping: Dict[str, str] = {}
+            template = await db.get_graph_template("parameter_comparison_bar") or self._get_default_template()
+
             for param_name, value in numeric_params.items():
                 status = await self._get_parameter_status_dynamic(param_name, value)
-                color = self._get_color_for_status(status, template)
-                
-                color_mapping[param_name] = color
+                color  = self._get_color_for_status(status, template)
+                color_mapping[param_name]  = color
                 status_mapping[param_name] = status
-                
-                logger.info(f"✅ {param_name} = {value} → {status} ({color})")
-            
-            # Create graph
-            fig, ax = plt.subplots(figsize=tuple(template['default_config']['figsize']))
-            
+
+            # ── Build figure ──────────────────────────────────────────────────
+            n = len(numeric_params)
+            fig_w = max(10, n * 1.1)
+            fig, ax = plt.subplots(figsize=(fig_w, 6))
+
+            # Dark background
+            fig.patch.set_facecolor("#0f0f1a")
+            ax.set_facecolor("#16213e")
+
             param_names = list(numeric_params.keys())
-            values = list(numeric_params.values())
-            colors = [color_mapping[name] for name in param_names]
-            
-            # Create bars
+            values      = list(numeric_params.values())
+            colors      = [color_mapping[p] for p in param_names]
+            x_pos       = range(n)
+
+            # ── Bars ──────────────────────────────────────────────────────────
             bars = ax.bar(
-                param_names, 
-                values, 
-                color=colors, 
-                edgecolor='black', 
-                linewidth=1.5, 
-                alpha=0.85
+                x_pos, values,
+                color=colors,
+                width=0.6,
+                edgecolor="#ffffff22",
+                linewidth=0.8,
+                zorder=3,
             )
-            
-            # Add value labels
-            for bar, value in zip(bars, values):
-                height = bar.get_height()
+
+            # Subtle gradient overlay (lighter top edge)
+            for bar, color in zip(bars, colors):
+                bar.set_alpha(0.88)
+
+            # ── Value labels on top of bars ───────────────────────────────────
+            for bar, val, param in zip(bars, values, param_names):
+                unit = units_map.get(param, "")
+                label = f"{val:.1f}" if val < 1000 else f"{val:,.0f}"
                 ax.text(
-                    bar.get_x() + bar.get_width() / 2.,
-                    height,
-                    f'{value:.2f}',
-                    ha='center',
-                    va='bottom',
-                    fontsize=9,
-                    fontweight='bold'
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + max(values) * 0.015,
+                    label,
+                    ha="center", va="bottom",
+                    fontsize=8.5, fontweight="bold",
+                    color="#ffffff", zorder=5,
                 )
-            
-            # Styling
-            ax.set_xlabel(
-                template['default_config']['xlabel'],
-                fontsize=12,
-                fontweight='bold'
+
+            # ── X axis labels ─────────────────────────────────────────────────
+            ax.set_xticks(list(x_pos))
+            ax.set_xticklabels(
+                [f"{p}\n({units_map.get(p,'')})" for p in param_names],
+                rotation=35, ha="right",
+                fontsize=9, color="#cccccc",
             )
-            ax.set_ylabel(
-                template['default_config']['ylabel'],
-                fontsize=12,
-                fontweight='bold'
-            )
+
+            # ── Y axis ───────────────────────────────────────────────────────
+            ax.set_ylabel("Concentration", fontsize=11, color="#aaaaaa", labelpad=10)
+            ax.tick_params(axis="y", colors="#888888", labelsize=9)
+            ax.yaxis.set_tick_params(length=0)
+
+            # ── Grid ─────────────────────────────────────────────────────────
+            ax.yaxis.grid(True, color="#2a2a4a", linewidth=0.6, linestyle="--", zorder=0)
+            ax.set_axisbelow(True)
+
+            # ── Spines ───────────────────────────────────────────────────────
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#2a2a4a")
+                spine.set_linewidth(0.8)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+
+            # ── Title ─────────────────────────────────────────────────────────
             ax.set_title(
-                template['default_config']['title'],
-                fontsize=14,
-                fontweight='bold',
-                pad=20
+                "Water Parameter Analysis",
+                fontsize=14, fontweight="bold",
+                color="#ffffff", pad=16,
             )
-            
-            plt.xticks(rotation=template['default_config']['rotation'], ha='right', fontsize=10)
-            
-            if template['default_config']['grid']:
-                ax.grid(axis='y', alpha=0.3, linestyle='--')
-            
-            plt.tight_layout()
-            
-            # Save
+
+            # ── Legend ───────────────────────────────────────────────────────
+            from matplotlib.patches import Patch
+            legend_items = [
+                Patch(facecolor="#2ECC71", label="Optimal"),
+                Patch(facecolor="#F1C40F", label="Warning"),
+                Patch(facecolor="#E74C3C", label="Critical"),
+                Patch(facecolor="#3498DB", label="Normal"),
+            ]
+            ax.legend(
+                handles=legend_items,
+                loc="upper right",
+                framealpha=0.15,
+                facecolor="#1a1a2e",
+                edgecolor="#2a2a4a",
+                labelcolor="#cccccc",
+                fontsize=9,
+            )
+
+            # ── X limits padding ──────────────────────────────────────────────
+            ax.set_xlim(-0.6, n - 0.4)
+            ax.set_ylim(0, max(values) * 1.18)
+
+            plt.tight_layout(pad=1.5)
+
+            # ── Save ──────────────────────────────────────────────────────────
             buffer = BytesIO()
-            plt.savefig(buffer, format='png', dpi=template['default_config']['dpi'], bbox_inches='tight')
+            plt.savefig(
+                buffer, format="png", dpi=150,
+                bbox_inches="tight",
+                facecolor=fig.get_facecolor(),
+            )
             buffer.seek(0)
             plt.close(fig)
-            
-            # Upload to S3
+
             graph_url = await self._upload_to_s3(buffer, "parameter_comparison")
-            
             logger.info(f"✅ Graph created: {graph_url}")
-            
+
             return {
-                "graph_url": graph_url,
-                "graph_type": "parameter_comparison_bar",
+                "graph_url":    graph_url,
+                "graph_type":   "parameter_comparison_bar",
                 "color_mapping": status_mapping,
-                "created_at": datetime.utcnow()
+                "created_at":   datetime.utcnow(),
             }
-            
+
         except Exception as e:
             logger.exception("❌ Graph creation failed")
             raise Exception(f"Graph creation failed: {str(e)}")

@@ -723,7 +723,7 @@ class SaturationService:
         asset_info       = req.get("asset_info") or {}
         raw_mat          = req.get("raw_material_chemistry") or {}
         product_blend    = req.get("product_blend") or {}
-        dosage_ppm       = float(req.get("dosage_ppm", 2.0))
+        dosage_ppm       = float(req.get("dosage_ppm") or 2.0)
         temp_unit        = req.get("temp_unit", "C")
 
         # Cooling tower params from asset_info
@@ -770,11 +770,33 @@ class SaturationService:
             conc_params["Temperature"] = {"value": temp_c, "unit": "C"}
 
             # ── Deposition Indices ──────────────────────────────────────────
+            # Use PHREEQC Calcite SI directly for LSI (most accurate)
+            calcite_si_phreeqc = None
+            for k, v in r["saturation_indices"].items():
+                if k.lower() == "calcite":
+                    calcite_si_phreeqc = v.get("SI") if isinstance(v, dict) else float(v)
+                    break
+
             indices: Dict[str, Any] = {}
             try:
-                indices["lsi"]          = await calc_svc.calculate_lsi(conc_params)
+                indices["lsi"] = await calc_svc.calculate_lsi(conc_params)
+                # Override with PHREEQC Calcite SI if available (more accurate)
+                if calcite_si_phreeqc is not None:
+                    lsi_phreeqc = round(calcite_si_phreeqc, 3)
+                    indices["lsi"]["lsi_phreeqc"] = lsi_phreeqc
+                    indices["lsi"]["lsi"] = lsi_phreeqc
+                    indices["lsi"]["source"] = "PHREEQC Calcite SI"
+                    if lsi_phreeqc > 0:
+                        indices["lsi"]["interpretation"] = "Scaling Tendency"
+                        indices["lsi"]["risk"] = "Scale Forming"
+                    elif lsi_phreeqc < 0:
+                        indices["lsi"]["interpretation"] = "Corrosive"
+                        indices["lsi"]["risk"] = "Corrosive"
+                    else:
+                        indices["lsi"]["interpretation"] = "Equilibrium"
+                        indices["lsi"]["risk"] = "Balanced"
             except Exception as e:
-                indices["lsi"]          = {"error": str(e)}
+                indices["lsi"] = {"error": str(e)}
             try:
                 indices["ryznar"]       = await calc_svc.calculate_ryznar(conc_params)
             except Exception as e:
@@ -1013,7 +1035,12 @@ class SaturationService:
             "color_map":    _COLOUR_HEX,
             "color_labels": color_labels,
             "total_points": len(points),
-            "points":       points,   # ← frontend builds the 3D chart from this
+            "available_salts": sorted(set(
+                mineral
+                for p in points
+                for mineral in (p.get("all_si") or {}).keys()
+            )),
+            "points":       points,
         }
 
     # ── STEP: summary counts ─────────────────────────────────────────────────
@@ -1038,6 +1065,11 @@ class SaturationService:
             raise ValueError("base_water_parameters could not be mapped to any known ions")
 
         base_ph = float(mapped.get("pH", 7.0))
+        # Validate pH — must be in realistic range (4–11)
+        if base_ph < 4.0 or base_ph > 11.0:
+            logger.warning(f"pH value {base_ph} is outside realistic range (4–11), defaulting to 7.0")
+            base_ph = 7.0
+            mapped["pH"] = 7.0
 
         # 2. pH adjustment
         mapped = _apply_ph_adjustment(mapped, req.get("adjustment_chemical"))
@@ -1047,12 +1079,12 @@ class SaturationService:
 
         # 4. Build grid
         grid = self._build_grid(
-            coc_min=float(req.get("coc_min", 1.0)),
-            coc_max=float(req.get("coc_max", 10.0)),
-            coc_interval=float(req.get("coc_interval", 1.0)),
-            temp_min=float(req.get("temp_min", 25.0)),
-            temp_max=float(req.get("temp_max", 60.0)),
-            temp_interval=float(req.get("temp_interval", 5.0)),
+            coc_min=float(req.get("coc_min") or 1.0),
+            coc_max=float(req.get("coc_max") or 10.0),
+            coc_interval=float(req.get("coc_interval") or 1.0),
+            temp_min=float(req.get("temp_min") or 25.0),
+            temp_max=float(req.get("temp_max") or 60.0),
+            temp_interval=float(req.get("temp_interval") or 5.0),
             temp_unit=req.get("temp_unit", "F"),
             ph_mode=req.get("ph_mode", "natural"),
             fixed_ph=req.get("fixed_ph"),
@@ -1062,6 +1094,32 @@ class SaturationService:
         # 5. PHREEQC batch + color
         salt_id           = req.get("salt_id")
         salts_of_interest = req.get("salts_of_interest")
+
+        # Run ion balance separately so we can report it
+        ion_balance_info: Dict[str, Any] = {}
+        try:
+            from app.services.phreeqc_service import PHREEQCService as _PHREEQC
+            _db_for_balance = self.phreeqc.select_database(
+                mapped,
+                ph_range=(base_ph, base_ph),
+                coc_range=(float(req.get("coc_min") or 1.0), float(req.get("coc_max") or 10.0)),
+                temp_range=(float(req.get("temp_min") or 25.0), float(req.get("temp_max") or 60.0)),
+            )
+            _balanced = await self.phreeqc.ion_balance(
+                mapped,
+                cation_ion=req.get("balance_cation", "Na"),
+                anion_ion=req.get("balance_anion", "Cl"),
+                database=_db_for_balance,
+            )
+            ion_balance_info = {
+                "balanced":        _balanced.get("_ion_balanced", False),
+                "iterations":      _balanced.get("_balance_iterations", 0),
+                "final_error_pct": _balanced.get("_charge_balance_error", None),
+                "adjustments":     _balanced.get("_ion_adjustments", []),
+            }
+        except Exception as _e:
+            logger.warning(f"Ion balance report failed (non-fatal): {_e}")
+            ion_balance_info = {"balanced": False, "error": str(_e)}
 
         results, db_used = await self._run_and_color(
             mapped_params=mapped,
@@ -1108,18 +1166,25 @@ class SaturationService:
         # 8. Summary
         summary = self._summary(results)
 
+        def _f(val, default):
+            """Safe float conversion — returns default if val is None."""
+            try:
+                return float(val) if val is not None else float(default)
+            except (TypeError, ValueError):
+                return float(default)
+
         # 9. Save to DB
         doc = {
             "run_id":             run_id,
             "salt_id":            effective_salt,
             "salts_of_interest":  salts_of_interest,
-            "dosage_ppm":         float(req.get("dosage_ppm", 2.0)),
-            "coc_min":            float(req.get("coc_min", 1.0)),
-            "coc_max":            float(req.get("coc_max", 10.0)),
-            "coc_interval":       float(req.get("coc_interval", 1.0)),
-            "temp_min":           float(req.get("temp_min", 25.0)),
-            "temp_max":           float(req.get("temp_max", 60.0)),
-            "temp_interval":      float(req.get("temp_interval", 5.0)),
+            "dosage_ppm":         _f(req.get("dosage_ppm"), 2.0),
+            "coc_min":            _f(req.get("coc_min"),    1.0),
+            "coc_max":            _f(req.get("coc_max"),    10.0),
+            "coc_interval":       _f(req.get("coc_interval"),1.0),
+            "temp_min":           _f(req.get("temp_min"),   25.0),
+            "temp_max":           _f(req.get("temp_max"),   60.0),
+            "temp_interval":      _f(req.get("temp_interval"),5.0),
             "temp_unit":          temp_unit,
             "ph_mode":            req.get("ph_mode", "natural"),
             "fixed_ph":           req.get("fixed_ph"),
@@ -1136,7 +1201,25 @@ class SaturationService:
             "product_blend":      req.get("product_blend"),
             "raw_material_chemistry": req.get("raw_material_chemistry"),
             "asset_info":         req.get("asset_info"),
+            # Report metadata
+            "report_name":        req.get("report_name"),
+            "customer_id":        req.get("customer_id"),
+            "customer_name":      req.get("customer_name"),
+            "asset_id":           req.get("asset_id"),
+            "location":           req.get("location"),
             "created_at":         datetime.now(timezone.utc).isoformat(),
+            # Ion balance report
+            "ion_balance_report": {
+                **ion_balance_info,
+                "balance_cation":    req.get("balance_cation", "Na"),
+                "balance_anion":     req.get("balance_anion", "Cl"),
+                "explanation": (
+                    "Ion balance adjusts Na+ (cation) or Cl- (anion) concentration "
+                    "to achieve charge balance (error < 5%). "
+                    "Positive electrical balance → anion increased. "
+                    "Negative electrical balance → cation increased."
+                ),
+            },
         }
         await db.db["saturation_runs"].insert_one(doc)
         logger.info(f"Saturation run saved  run_id={run_id}  summary={summary}")

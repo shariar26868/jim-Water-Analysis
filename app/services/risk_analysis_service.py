@@ -497,13 +497,19 @@ class RiskAnalysisService:
             logger.info(f"ℹ️ Note: Contamination score: 0=safe, 10=critical (inverse of quality score)")
             
             return {
-                "heavy_metals": heavy_metals,
-                "organic_compounds": organic_compounds,
-                "microbiological": microbiological,
-                "overall_severity": overall_severity,
-                "contamination_score": contamination_score,  # ✅ NEW: Clearer naming
-                "risk_score": contamination_score,  # ✅ KEEP: Backward compatibility with Pydantic model
-                "score_explanation": "contamination_score: 0=safe, 10=critical (inverse of water quality score)"
+                "assessment_title":   "Heavy Metals Assessment",
+                "heavy_metals":       heavy_metals,
+                "organic_compounds":  organic_compounds,
+                "microbiological":    microbiological,
+                "overall_severity":   overall_severity,
+                "contamination_score": contamination_score,
+                "risk_score":         contamination_score,   # backward compat
+                "score_explanation": (
+                    "Contamination score 0-10: "
+                    "0 = no detected contaminants, "
+                    "10 = critical levels across multiple parameters. "
+                    "Weighted: Critical×10 + High×7 + Medium×4 + Low×1, divided by count."
+                ),
             }
             
         except Exception as e:
@@ -511,46 +517,77 @@ class RiskAnalysisService:
             raise Exception(f"Risk analysis failed: {str(e)}")
     
     async def _analyze_heavy_metals(self, parameters: Dict) -> List[Dict]:
-        """Analyze heavy metal contamination - FIXED"""
-        heavy_metal_keywords = [
-            "lead", "arsenic", "mercury", "cadmium", "chromium",
-            "pb", "as", "hg", "cd", "cr", "copper", "cu", "zinc", "zn",
-            "nickel", "ni", "iron", "fe", "manganese", "mn",
-            "aluminum", "al", "barium", "ba"
-        ]
-        
-        # ✅ FIXED: Comprehensive exclusion list - these are NOT contaminants
-        exclude_keywords = [
-            # Nutrients
-            "nitrate", "nitrite", "phosphate", "ammonia", "nitrogen",
-            
-            # Major ions (normal water constituents)
-            "potassium", "sodium", "calcium", "magnesium", "chloride", "sulfate", "sulphate",
-            
-            # ✅ CRITICAL FIX: Alkalinity and related
-            "alkalinity", "bicarbonate", "carbonate", "hardness",
-            
-            # Physical parameters
-            "tds", "conductivity", "temperature", "ph", "turbidity", "color",
-            
-            # Disinfection
-            "chlorine", "free_chlorine", "total_chlorine", "residual_chlorine"
-        ]
+        """
+        Heavy Metals Assessment — strict WHO/IUPAC definition only.
+
+        True heavy metals: Pb, As, Hg, Cd, Cr, Cu, Zn, Ni, Fe, Mn, Al, Ba, Se, Sb, Tl, Be
+        Excluded (NOT heavy metals): Silica, Sulfur, Azoles, Alkalinity, Chloride,
+          Sulfate, Sodium, Calcium, Magnesium, Potassium, Nitrate, Phosphate, etc.
+        """
+        # ── Strict heavy metal list (WHO/IUPAC) ──────────────────────────────
+        TRUE_HEAVY_METALS = {
+            "lead": "Pb",   "pb": "Pb",
+            "arsenic": "As","as": "As",
+            "mercury": "Hg","hg": "Hg",
+            "cadmium": "Cd","cd": "Cd",
+            "chromium": "Cr","cr": "Cr",
+            "copper": "Cu", "cu": "Cu",
+            "zinc": "Zn",   "zn": "Zn",
+            "nickel": "Ni", "ni": "Ni",
+            "iron": "Fe",   "fe": "Fe",
+            "manganese": "Mn","mn": "Mn",
+            "aluminum": "Al","aluminium": "Al","al": "Al",
+            "barium": "Ba", "ba": "Ba",
+            "selenium": "Se","se": "Se",
+            "antimony": "Sb","sb": "Sb",
+            "thallium": "Tl","tl": "Tl",
+            "beryllium": "Be","be": "Be",
+            "cobalt": "Co", "co": "Co",
+            "vanadium": "V",
+            "silver": "Ag", "ag": "Ag",
+        }
+
+        # ── Explicit exclusions (NOT heavy metals) ────────────────────────────
+        NOT_HEAVY_METALS = {
+            # Non-metals / metalloids that are NOT heavy metals
+            "silica", "sio2", "silicon", "si",
+            "sulfur", "sulphur", "so4", "sulfate", "sulphate",
+            "phosphorus", "phosphate", "po4",
+            "nitrogen", "nitrate", "nitrite", "no3", "no2",
+            "fluoride", "fluorine",
+            "chloride", "chlorine", "cl",
+            "bromine", "bromide",
+            "iodine", "iodide",
+            # Organic / treatment chemicals
+            "azole", "tta", "bta", "mbt", "tolyltriazole", "benzotriazole",
+            "pma", "hedp", "atmp", "inhibitor",
+            # Major water constituents
+            "sodium", "na", "potassium", "k",
+            "calcium", "ca", "magnesium", "mg",
+            "alkalinity", "bicarbonate", "hco3", "carbonate", "co3",
+            "hardness", "tds", "conductivity",
+            # Physical
+            "temperature", "ph", "turbidity", "color", "colour",
+        }
         
         heavy_metals = []
-        
+
         for param_name, param_data in parameters.items():
-            param_lower = param_name.lower()
-            
-            # ✅ FIXED: Check exclusions first
-            if any(ex in param_lower for ex in exclude_keywords):
-                logger.debug(f"Excluded from heavy metals: {param_name}")
+            param_lower = param_name.lower().replace(" ", "").replace("_", "").replace("-", "")
+
+            # Exclude non-heavy-metals first
+            if any(ex.replace(" ", "").replace("_", "") in param_lower for ex in NOT_HEAVY_METALS):
+                logger.debug(f"Not a heavy metal, excluded: {param_name}")
                 continue
-            
-            # Check if it's a heavy metal
-            is_heavy_metal = any(keyword in param_lower for keyword in heavy_metal_keywords)
-            
-            if not is_heavy_metal:
+
+            # Must match a true heavy metal
+            matched_symbol = None
+            for keyword, symbol in TRUE_HEAVY_METALS.items():
+                if keyword in param_lower:
+                    matched_symbol = symbol
+                    break
+
+            if not matched_symbol:
                 continue
             
             value = param_data.get("value")
@@ -572,10 +609,12 @@ class RiskAnalysisService:
             
             heavy_metals.append({
                 "contaminant_name": param_name,
+                "chemical_symbol":  matched_symbol,
                 "value": value,
                 "unit": unit,
                 "risk_level": risk_level,
-                "threshold": threshold
+                "threshold": threshold,
+                "who_limit": threshold,
             })
             
             logger.info(f"Heavy Metal: {param_name} = {value} {unit} → {risk_level}")

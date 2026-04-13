@@ -311,6 +311,43 @@ def get_chemical_formula(param_name: str) -> Dict:
     }
 
 
+# ── Unit notation map ─────────────────────────────────────────────────────────
+_UNIT_AS_NOTATION = {
+    "alkalinity": "as CaCO3", "total_alkalinity": "as CaCO3",
+    "bicarbonate": "as CaCO3", "hardness": "as CaCO3",
+    "total_hardness": "as CaCO3",
+    "calcium": "as Ca", "magnesium": "as Mg", "sodium": "as Na",
+    "potassium": "as K", "iron": "as Fe", "manganese": "as Mn",
+    "copper": "as Cu", "zinc": "as Zn", "lead": "as Pb",
+    "arsenic": "as As", "mercury": "as Hg", "cadmium": "as Cd",
+    "chromium": "as Cr", "barium": "as Ba", "selenium": "as Se",
+    "molybdenum": "as Mo", "nickel": "as Ni",
+    "aluminum": "as Al", "aluminium": "as Al", "silver": "as Ag",
+    "boron": "as B",
+    "chloride": "as Cl", "sulfate": "as SO4", "sulphate": "as SO4",
+    "nitrate": "as NO3", "nitrite": "as NO2",
+    "phosphate": "as PO4", "fluoride": "as F",
+    "silica": "as SiO2",
+    "tds": "", "ph": "", "temperature": "",
+}
+
+
+def _get_display_unit(param_name: str, raw_unit: str, formula_info: Dict) -> str:
+    """Return properly notated unit, e.g. 'mg/L as CaCO3'."""
+    key = param_name.lower().replace(" ", "_").replace("-", "_")
+    suffix = _UNIT_AS_NOTATION.get(key)
+    if suffix is None:
+        for k, s in _UNIT_AS_NOTATION.items():
+            if k in key or key in k:
+                suffix = s
+                break
+    if suffix is None:
+        symbol = formula_info.get("symbol") or formula_info.get("ionic_form")
+        suffix = f"as {symbol}" if symbol else ""
+    base = raw_unit if raw_unit else "mg/L"
+    return f"{base} {suffix}".strip() if suffix else base
+
+
 class CompositionService:
     """Analyze chemical composition of water sample - FIXED VERSION"""
     
@@ -353,12 +390,17 @@ class CompositionService:
                 
                 # ✅ GET CHEMICAL FORMULA INFO (FIXED)
                 formula_info = get_chemical_formula(param_name)
+
+                # ── Proper unit notation ──────────────────────────────────────
+                # e.g. Alkalinity → "mg/L as CaCO3", Calcium → "mg/L as Ca"
+                display_unit = _get_display_unit(param_name, unit, formula_info)
                 
                 # Build parameter object with formulas
                 composition_params.append({
                     "parameter_name": param_name,
                     "value": value,
-                    "unit": unit or "",
+                    "unit": display_unit,
+                    "unit_raw": unit or "",
                     "status": status,
                     "threshold": threshold,
                     

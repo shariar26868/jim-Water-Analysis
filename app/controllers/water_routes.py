@@ -1016,9 +1016,17 @@ async def analyze_extracted_data(
         logger.info("⚗️ Starting data analysis")
         
         # Extract from request body
-        parameters = data.get("parameters", {})
+        parameters      = data.get("parameters", {})
         sample_location = data.get("sample_location")
-        sample_date = data.get("sample_date")
+        sample_date     = data.get("sample_date")
+        analysis_date   = data.get("analysis_date")
+        water_use_type  = data.get("water_use_type")    # makeup_water | cooling_tower_water | process_water
+        water_source_type = data.get("water_source_type")  # city | surface | well | sea
+        location        = data.get("location")
+        report_name     = data.get("report_name")
+        customer_id     = data.get("customer_id")
+        customer_name   = data.get("customer_name")
+        asset_id        = data.get("asset_id")
         
         # Validate parameters
         if not parameters or not isinstance(parameters, dict):
@@ -1059,6 +1067,15 @@ async def analyze_extracted_data(
         except Exception as e:
             logger.warning(f"Graph generation failed: {e}")
             parameter_graph = {"error": "Graph generation failed"}
+
+        # Derived Calculations (TDS from conductivity, Ca ratios)
+        logger.info("🔢 Calculating derived parameters...")
+        try:
+            calc_service    = CalculationService()
+            derived_params  = calc_service.calculate_derived_parameters(parameters)
+        except Exception as e:
+            logger.warning(f"Derived calculations failed: {e}")
+            derived_params  = {}
         
         # Composition Analysis
         logger.info("🧪 Analyzing chemical composition...")
@@ -1082,7 +1099,7 @@ async def analyze_extracted_data(
         logger.info("✓ Checking compliance...")
         compliance_service = ComplianceService()
         try:
-            compliance_checklist = await compliance_service.check_compliance(parameters, chemical_status)
+            compliance_checklist = await compliance_service.check_compliance(parameters, chemical_status, location=location)
         except Exception as e:
             logger.error(f"Compliance check failed: {e}")
             compliance_checklist = {}
@@ -1157,6 +1174,14 @@ async def analyze_extracted_data(
             contamination_risk=contamination_risk,
             sample_location=sample_location,
             sample_date=sample_date,
+            analysis_date=analysis_date,
+            water_use_type=water_use_type,
+            water_source_type=water_source_type,
+            location=location,
+            report_name=report_name,
+            customer_id=customer_id,
+            customer_name=customer_name,
+            asset_id=asset_id,
             created_at=datetime.utcnow()
         )
         
@@ -1943,27 +1968,39 @@ async def debug_phreeqc_output(data: Dict[str, Any] = Body(...)):
     Use this to see exact output format for parser debugging.
     """
     try:
-        from app.services.phreeqc_service import PHREEQCService
+        from app.services.phreeqc_service import PHREEQCService, _concentrate_params, _set_ph_temp
         svc = PHREEQCService()
 
-        params = data.get("params", {
+        base_params = data.get("base_water_parameters") or data.get("params", {
             "pH": 7.2, "Temperature": 25.0,
             "Ca": 80.0, "Mg": 25.0, "Na": 40.0,
             "Cl": 30.0, "SO4": 60.0, "HCO3": 120.0, "SiO2": 15.0,
         })
 
-        # Get raw output text directly
-        pqi = svc._build_pqi(params)
+        # Optional: test at specific CoC + Temperature
+        coc   = float(data.get("coc", 1.0))
+        temp  = float(data.get("temp_c", 25.0))
+        ph    = float(data.get("ph", base_params.get("pH", 7.0) if isinstance(base_params.get("pH"), (int,float)) else 7.0))
+
+        # Concentrate params at given CoC
+        concentrated = _concentrate_params(base_params, coc)
+        concentrated = _set_ph_temp(concentrated, ph, temp)
+
+        pqi        = svc._build_pqi(concentrated)
         raw_output = await svc._execute_phreeqc_raw(pqi, svc.phreeqc_dat)
         parsed     = svc._parse_phreeqc_output(raw_output)
 
         return {
+            "test_conditions":    {"coc": coc, "temp_c": temp, "ph": ph},
+            "concentrated_params": concentrated,
             "pqi_input":          pqi,
             "raw_output_preview": raw_output[:6000],
             "raw_output_tail":    raw_output[-2000:],
             "parsed_si_count":    len(parsed["saturation_indices"]),
-            "parsed_si_sample":   parsed["saturation_indices"][:10],
+            "parsed_si_sample":   parsed["saturation_indices"][:15],
             "ionic_strength":     parsed["ionic_strength"],
+            "charge_balance_error_pct": parsed.get("charge_balance_error_pct"),
+            "electrical_balance": parsed.get("electrical_balance"),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1991,4 +2028,95 @@ async def get_available_salts():
         }
     except Exception as e:
         logger.exception("Get available salts failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Saturation run history endpoints ─────────────────────────────────────────
+
+@router.get(
+    "/saturation/runs",
+    summary="List all saturation runs (paginated)",
+    tags=["Saturation Analysis"],
+)
+async def list_saturation_runs(
+    page:      int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    """List all saturation runs, newest first."""
+    try:
+        skip  = (page - 1) * page_size
+        col   = db.db["saturation_runs"]
+        total = await col.count_documents({})
+        docs  = await col.find({}, {"grid_results": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+        for d in docs:
+            d.pop("_id", None)
+        return {"success": True, "total": total, "page": page, "page_size": page_size, "runs": docs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/saturation/runs/{run_id}",
+    summary="Get a specific saturation run by run_id",
+    tags=["Saturation Analysis"],
+)
+async def get_saturation_run(run_id: str):
+    """Retrieve full saturation run result by run_id (no recalculation)."""
+    try:
+        doc = await db.db["saturation_runs"].find_one({"run_id": run_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+        doc.pop("_id", None)
+        return {"success": True, "data": doc}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/saturation/runs/by-customer/{customer_id}",
+    summary="Get all saturation runs for a customer",
+    tags=["Saturation Analysis"],
+)
+async def get_runs_by_customer(
+    customer_id: str,
+    page:        int = Query(1, ge=1),
+    page_size:   int = Query(20, ge=1, le=100),
+):
+    """Retrieve all saturation runs saved under a specific customer_id."""
+    try:
+        skip  = (page - 1) * page_size
+        col   = db.db["saturation_runs"]
+        query = {"customer_id": customer_id}
+        total = await col.count_documents(query)
+        docs  = await col.find(query, {"grid_results": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+        for d in docs:
+            d.pop("_id", None)
+        return {"success": True, "customer_id": customer_id, "total": total, "runs": docs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/saturation/runs/by-asset/{asset_id}",
+    summary="Get all saturation runs for an asset",
+    tags=["Saturation Analysis"],
+)
+async def get_runs_by_asset(
+    asset_id: str,
+    page:     int = Query(1, ge=1),
+    page_size:int = Query(20, ge=1, le=100),
+):
+    """Retrieve all saturation runs saved under a specific asset_id."""
+    try:
+        skip  = (page - 1) * page_size
+        col   = db.db["saturation_runs"]
+        query = {"asset_id": asset_id}
+        total = await col.count_documents(query)
+        docs  = await col.find(query, {"grid_results": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+        for d in docs:
+            d.pop("_id", None)
+        return {"success": True, "asset_id": asset_id, "total": total, "runs": docs}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

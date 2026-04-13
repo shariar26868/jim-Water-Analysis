@@ -757,3 +757,88 @@ class CalculationService:
         except Exception as e:
             logger.error(f"❌ Comprehensive calculation failed: {e}")
             raise
+
+    # ========================================
+    # DERIVED CALCULATIONS (from extracted params)
+    # ========================================
+    def calculate_derived_parameters(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Calculate derived values from extracted parameters.
+
+        1. TDS from Conductivity  — if TDS not provided
+           TDS (mg/L) ≈ Conductivity (µS/cm) × 0.64  (typical factor 0.55–0.70)
+
+        2. Calcium : Conductivity Ratio
+           Ca (mg/L) / Conductivity (µS/cm)
+           Typical range: 0.10–0.20 for most natural waters
+
+        3. Calcium : Alkalinity Ratio
+           Ca (mg/L as CaCO3) / Alkalinity (mg/L as CaCO3)
+           Ratio > 1 → calcium-dominated hardness
+           Ratio < 1 → alkalinity-dominated (bicarbonate hardness)
+        """
+        derived: Dict[str, Any] = {}
+
+        ca      = self.get_param_value(parameters, "Calcium",      0.0)
+        alk     = self.get_param_value(parameters, "Alkalinity",   0.0) or \
+                  self.get_param_value(parameters, "Bicarbonate",  0.0)
+        tds     = self.get_param_value(parameters, "TDS",          0.0)
+        cond    = self.get_param_value(parameters, "Conductivity", 0.0) or \
+                  self.get_param_value(parameters, "EC",           0.0)
+
+        # 1. TDS from Conductivity
+        if tds == 0.0 and cond > 0:
+            tds_calc = round(cond * 0.64, 1)
+            derived["tds_calculated"] = {
+                "value":       tds_calc,
+                "unit":        "mg/L",
+                "method":      "TDS ≈ Conductivity × 0.64",
+                "conductivity_used": cond,
+                "note":        "Estimated. Actual factor varies by water type (0.55–0.70).",
+            }
+        else:
+            derived["tds_calculated"] = None
+
+        # 2. Calcium : Conductivity Ratio
+        if ca > 0 and cond > 0:
+            ratio = round(ca / cond, 4)
+            if ratio < 0.10:
+                interp = "Low — calcium is a minor fraction of dissolved solids"
+            elif ratio <= 0.20:
+                interp = "Normal — typical natural water range"
+            else:
+                interp = "High — calcium-rich water (hard water)"
+            derived["calcium_conductivity_ratio"] = {
+                "value":         ratio,
+                "unit":          "mg/L per µS/cm",
+                "calcium_mg_l":  ca,
+                "conductivity":  cond,
+                "interpretation": interp,
+            }
+        else:
+            derived["calcium_conductivity_ratio"] = None
+
+        # 3. Calcium : Alkalinity Ratio (both as CaCO3)
+        if ca > 0 and alk > 0:
+            # Convert Ca to CaCO3 equivalent: Ca (mg/L) × (100.09 / 40.08)
+            ca_as_caco3  = round(ca * (100.09 / 40.08), 2)
+            alk_as_caco3 = alk   # Alkalinity is already reported as CaCO3
+            ratio_ca_alk = round(ca_as_caco3 / alk_as_caco3, 3)
+            if ratio_ca_alk > 1.5:
+                interp = "Calcium-dominated — high scaling potential"
+            elif ratio_ca_alk >= 0.8:
+                interp = "Balanced — typical cooling water"
+            else:
+                interp = "Alkalinity-dominated — bicarbonate hardness"
+            derived["calcium_alkalinity_ratio"] = {
+                "value":            ratio_ca_alk,
+                "unit":             "dimensionless",
+                "calcium_as_caco3": ca_as_caco3,
+                "alkalinity_as_caco3": alk_as_caco3,
+                "interpretation":   interp,
+                "note":             "Both values expressed as mg/L CaCO3",
+            }
+        else:
+            derived["calcium_alkalinity_ratio"] = None
+
+        return derived
