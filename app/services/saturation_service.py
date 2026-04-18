@@ -1376,24 +1376,51 @@ class SaturationService:
     # PUBLIC: get_available_salts  (PHREEQC mineral list, cached in MongoDB)
     # ─────────────────────────────────────────────────────────────────────────
     async def get_available_salts(self) -> List[Dict[str, str]]:
-        # Try cache first
-        cached = await db.get_cached_phreeqc_info("default")
+        # Try cache first — use a versioned key so old incomplete caches are ignored
+        cached = await db.get_cached_phreeqc_info("default_v2")
         if cached and cached.get("minerals"):
             return cached["minerals"]
 
-        # Run minimal PHREEQC to get mineral list
+        # Parse all minerals from .dat file (or fallback to PHREEQC run)
         salts = await self._fetch_salts_from_phreeqc()
 
-        # Cache result
-        await db.cache_phreeqc_database_info("default", {"minerals": salts})
+        # Cache result under versioned key
+        await db.cache_phreeqc_database_info("default_v2", {"minerals": salts})
         return salts
 
     async def _fetch_salts_from_phreeqc(self) -> List[Dict[str, str]]:
-        """Run a minimal PHREEQC input and parse all saturation indices returned."""
+        """
+        Fetch ALL minerals/salts from the PHREEQC database.
+
+        Strategy (in order):
+          1. Parse PHASES section directly from phreeqc.dat  ← returns every mineral
+          2. If that yields nothing, also try pitzer.dat
+          3. Fallback: run a minimal PHREEQC simulation and collect SI output
+             (legacy behaviour — only returns minerals relevant to that water chemistry)
+        """
+        # ── Primary: parse .dat file directly ────────────────────────────────
+        salts = self.phreeqc.parse_phases_from_dat_file(self.phreeqc.phreeqc_dat)
+
+        if not salts:
+            # Try pitzer.dat as well (may have additional minerals)
+            logger.info("phreeqc.dat yielded no minerals — trying pitzer.dat")
+            salts = self.phreeqc.parse_phases_from_dat_file(self.phreeqc.pitzer_dat)
+
+        if salts:
+            logger.info(f"✅ Fetched {len(salts)} salts by parsing PHASES section from .dat file")
+            return salts
+
+        # ── Fallback: run minimal PHREEQC simulation ─────────────────────────
+        logger.warning(
+            "Direct .dat PHASES parse returned no results — "
+            "falling back to PHREEQC simulation (may return incomplete salt list)"
+        )
         minimal_params = {
             "pH": 7.0, "Temperature": 25.0,
             "Ca": 100.0, "Mg": 30.0, "Na": 50.0, "K": 5.0,
             "HCO3": 150.0, "SO4": 50.0, "Cl": 50.0, "SiO2": 20.0,
+            # Include trace ions so more minerals appear in SI output
+            "Ba": 0.1, "Sr": 0.1, "Fe": 0.1, "F": 0.1,
         }
         try:
             result = await self.phreeqc._run_phreeqc_single(minimal_params, self.phreeqc.phreeqc_dat)
@@ -1401,12 +1428,12 @@ class SaturationService:
             for item in result.get("saturation_indices", []):
                 if isinstance(item, dict):
                     salts.append({
-                        "name":            item.get("mineral_name", ""),
+                        "name":             item.get("mineral_name", ""),
                         "chemical_formula": item.get("chemical_formula", ""),
-                        "phase":           item.get("phase", ""),
+                        "phase":            item.get("phase", ""),
                     })
-            logger.info(f"Fetched {len(salts)} salts from PHREEQC")
+            logger.info(f"Fallback PHREEQC run returned {len(salts)} salts")
             return salts
         except Exception as e:
-            logger.error(f"Failed to fetch salts from PHREEQC: {e}")
+            logger.error(f"Failed to fetch salts from PHREEQC fallback run: {e}")
             return []

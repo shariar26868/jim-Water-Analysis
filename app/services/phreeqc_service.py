@@ -826,6 +826,98 @@ class PHREEQCService:
         return results
 
     # ========================================
+    # PARSE ALL PHASES FROM .DAT FILE DIRECTLY
+    # ========================================
+    def parse_phases_from_dat_file(self, dat_file_path: Optional[str] = None) -> List[Dict[str, str]]:
+        """
+        Parse the PHASES section directly from a PHREEQC .dat database file.
+        This returns ALL minerals defined in the database — not just those
+        that appear in a specific water chemistry run.
+
+        PHREEQC .dat PHASES format:
+            PHASES
+            Calcite
+                CaCO3 = Ca+2 + CO3-2
+                log_k   8.480
+            Gypsum
+                CaSO4:2H2O = Ca+2 + SO4-2 + 2H2O
+                log_k   -4.581
+            ...
+
+        Returns:
+            List of dicts: [{"name": "Calcite", "chemical_formula": "CaCO3", "phase": "Calcite"}, ...]
+        """
+        path = dat_file_path or self.phreeqc_dat
+
+        if not os.path.isfile(path):
+            logger.warning(f"DAT file not found for PHASES parsing: {path}")
+            return []
+
+        minerals: List[Dict[str, str]] = []
+
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+
+            # Find the PHASES block — it starts at "PHASES" keyword and ends at the
+            # next top-level keyword (all-caps word at column 0, e.g. SOLUTION_MASTER_SPECIES)
+            phases_match = re.search(
+                r"^PHASES\s*\n(.*?)(?=^\s*[A-Z_]{3,}\s*$|\Z)",
+                content,
+                re.MULTILINE | re.DOTALL,
+            )
+
+            if not phases_match:
+                logger.warning(f"No PHASES section found in: {path}")
+                return []
+
+            phases_block = phases_match.group(1)
+
+            # Each mineral entry starts at column 0 (no leading whitespace),
+            # followed by indented reaction line(s) and log_k line(s).
+            # Pattern: line at col-0 that is NOT a comment (#) and NOT all-caps keyword
+            mineral_name_re = re.compile(r"^([A-Za-z][A-Za-z0-9_\-()]*)\s*$", re.MULTILINE)
+            # Reaction line: first indented line after the mineral name (contains "=")
+            reaction_re = re.compile(r"^\s+(\S[^=\n]+)=(.+)$", re.MULTILINE)
+
+            # Split block into per-mineral chunks by finding name lines
+            entries = mineral_name_re.split(phases_block)
+            # entries = [pre_text, name1, block1, name2, block2, ...]
+            # entries[0] is text before first mineral name (usually empty)
+
+            i = 1  # skip pre_text
+            while i < len(entries) - 1:
+                name  = entries[i].strip()
+                block = entries[i + 1]
+                i += 2
+
+                if not name:
+                    continue
+
+                # Extract chemical formula from the reaction line (left side of "=")
+                formula = ""
+                rxn_match = reaction_re.search(block)
+                if rxn_match:
+                    lhs = rxn_match.group(1).strip()
+                    # Formula is the first token of the left-hand side
+                    # e.g. "CaCO3" from "CaCO3 = Ca+2 + CO3-2"
+                    # e.g. "CaSO4:2H2O" from "CaSO4:2H2O = ..."
+                    formula = lhs.split()[0] if lhs else ""
+
+                minerals.append({
+                    "name":             name,
+                    "chemical_formula": formula,
+                    "phase":            name,
+                })
+
+            logger.info(f"✅ Parsed {len(minerals)} minerals from PHASES section: {path}")
+            return minerals
+
+        except Exception as e:
+            logger.error(f"Failed to parse PHASES from {path}: {e}")
+            return []
+
+    # ========================================
     # HIGH-LEVEL: FULL ANALYSIS (single point)
     # ========================================
     async def analyze(
