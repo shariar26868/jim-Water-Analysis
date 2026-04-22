@@ -1259,13 +1259,20 @@ class RawMaterialChemistry(BaseModel):
 
 
 class AssetInfo(BaseModel):
-    name:               Optional[str]       = None
-    type:               Optional[str]       = None
-    towerType:          Optional[str]       = None
-    systemVolume:       Optional[float]     = None
-    systemMetallurgy:   Optional[List[str]] = None
-    systemMaterials:    Optional[List[str]] = None
-    recirculationRate:  Optional[float]     = None
+    name:                   Optional[str]       = None
+    type:                   Optional[str]       = None
+    towerType:              Optional[str]       = None
+    fillType:               Optional[str]       = None   # Film Fill High-Efficiency | Splash Fill | etc.
+    draftType:              Optional[str]       = None   # Forced Draft | Induced Draft | Natural Draft
+    approachToWB:           Optional[float]     = None   # cold supply temp - wet bulb temp (°F)
+    systemVolume:           Optional[float]     = None
+    systemMetallurgy:       Optional[List[str]] = None
+    systemMaterials:        Optional[List[str]] = None
+    recirculationRate:      Optional[float]     = None
+    supplyTemperature:      Optional[float]     = None   # cold basin temp
+    supplyTemperatureType:  Optional[str]       = None   # "°F" or "°C"
+    returnTemperature:      Optional[float]     = None   # hot evaluation temp
+    returnTemperatureType:  Optional[str]       = None   # "°F" or "°C"
 
 
 class SaturationRunRequest(BaseModel):
@@ -1301,6 +1308,9 @@ class SaturationRunRequest(BaseModel):
 
     # pH adjustment chemical
     adjustment_chemical:  Optional[str]       = None   # "H2SO4" | "HCl" | "NaOH"
+
+    # CO2 partial pressure override (auto-calculated from tower type if not provided)
+    co2_log_partial_pressure: Optional[float] = None   # e.g. -3.1 for crossflow+splash fill
 
     # Charge balance ions
     balance_cation:       Optional[str]       = "Na"

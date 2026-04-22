@@ -1,13 +1,26 @@
 """
-Saturation Analysis Service  — v2
+Saturation Analysis Service  — v3
 ===================================
-Accepts fully-resolved AI-server payload.
-No DB fetch for water params (comes inline).
-Dynamic base_water_parameters key mapping.
-All saturation index details saved (Phase, SI, log IAP, log K, formula).
-3 public methods:
+Implements client's exact 2-step PHREEQC workflow:
+
+  Step 1-3  (per CoC):
+    SOLUTION at cold basin temp + EQUILIBRIUM_PHASES CO2(g)
+    → Calculates natural pH after CO2 degassing
+
+  Step 5-6  (per CoC):
+    SOLUTION at hot evaluation temp, pH from Step 3, Cl charge balance
+    → Final SI values used for graph and display
+
+CO2 partial pressure is auto-calculated from tower type:
+  Base -3.4 + airflow + fill + draft + approach_to_WB adjustments
+
+Special cases:
+  Evaporative Condenser → base -3.4, no correction
+  Once Through Cooling  → no EQUILIBRIUM_PHASES at all
+
+Public methods:
   run_analysis(request_dict)   → full pipeline
-  switch_salt(run_id, salt_id) → re-graph from saved DB data
+  switch_salt(run_id, salt_id) → re-graph from saved DB data (no re-run)
   get_available_salts()        → PHREEQC mineral list (cached)
 """
 
@@ -51,9 +64,9 @@ _PARAM_ALIAS: Dict[str, str] = {
     "chloride": "Cl", "cl": "Cl",
     # Sulfate / Sulphate
     "sulfate": "SO4", "sulphate": "SO4", "so4": "SO4",
-    # Alkalinity / Bicarbonate
+    # Alkalinity / Bicarbonate — NOT Total Hardness
     "alkalinity": "HCO3", "bicarbonate": "HCO3", "hco3": "HCO3",
-    "total_alkalinity": "HCO3",
+    "total_alkalinity": "HCO3", "m_alkalinity": "HCO3",
     # Silica
     "silica": "SiO2", "sio2": "SiO2", "silicon": "SiO2",
     # Barium
@@ -74,6 +87,18 @@ _PARAM_ALIAS: Dict[str, str] = {
     "phosphate": "PO4", "po4": "PO4",
     # Manganese
     "manganese": "Mn", "mn": "Mn",
+    # Potassium (alternate)
+    "k_": "K",
+}
+
+# Keys to explicitly SKIP — these are not PHREEQC ions
+_SKIP_KEYS = {
+    "total_hardness", "total_dissolved_solids", "tds",
+    "electrical_conductivity", "conductivity", "turbidity",
+    "total_coliform", "e_coli", "fecal_coliform",
+    "bod", "cod", "toc",
+    "arsenic", "lead", "cadmium", "chromium", "mercury",
+    "cyanide", "phenolic_compounds", "nitrite",
 }
 
 # pH adjustment rules per chemical
@@ -90,15 +115,23 @@ _COLOUR_HEX = {"green": "#2ECC71", "yellow": "#F1C40F", "red": "#E74C3C", "error
 def _map_water_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     """
     Convert dynamic OCR keys → internal PHREEQC ion keys.
-    Handles nested {value, unit, detection_limit} dicts.
-    Skips non-numeric / zero-value entries.
+    Preserves unit information for unit-aware PHREEQC input building.
+    Returns dict: { ion_key: {"value": float, "unit": str} }
     """
     out: Dict[str, Any] = {}
     for key, val in raw.items():
         norm = key.lower().replace(" ", "_").replace("-", "_")
+
+        # Explicitly skip non-ion parameters
+        if norm in _SKIP_KEYS:
+            continue
+
         ion = _PARAM_ALIAS.get(norm)
         if ion is None:
-            # try partial match
+            skip_match = any(s in norm for s in ["hardness", "dissolved_solid", "conductivity",
+                                                   "coliform", "turbidity", "phenol"])
+            if skip_match:
+                continue
             for alias, mapped in _PARAM_ALIAS.items():
                 if alias in norm or norm in alias:
                     ion = mapped
@@ -106,11 +139,13 @@ def _map_water_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         if ion is None:
             continue
 
-        # Extract numeric value
+        # Extract numeric value and unit
         if isinstance(val, dict):
             numeric = val.get("value")
+            unit    = val.get("unit", "mg/L") or "mg/L"
         elif isinstance(val, (int, float)):
             numeric = val
+            unit    = "mg/L"
         else:
             continue
 
@@ -121,13 +156,35 @@ def _map_water_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             continue
 
-        out[ion] = numeric
+        if ion != "pH" and numeric <= 0:
+            continue
+
+        # Store with unit for unit-aware PHREEQC input
+        out[ion] = {"value": numeric, "unit": unit.strip()}
 
     return out
 
 
+def _get_ion_value(mapped: Dict[str, Any], ion: str) -> Optional[float]:
+    """Get numeric value from mapped params."""
+    v = mapped.get(ion)
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        return float(v.get("value", 0))
+    return float(v)
+
+
+def _get_ion_unit(mapped: Dict[str, Any], ion: str) -> str:
+    """Get unit from mapped params."""
+    v = mapped.get(ion)
+    if isinstance(v, dict):
+        return v.get("unit", "mg/L") or "mg/L"
+    return "mg/L"
+
+
 def _apply_ph_adjustment(params: Dict[str, Any], chemical: Optional[str]) -> Dict[str, Any]:
-    """Adjust alkalinity + counterion based on pH chemical. Dose is implicit in fixed_ph logic."""
+    """Adjust alkalinity + counterion based on pH chemical."""
     if not chemical:
         return dict(params)
     rules = _PH_RULES.get(chemical.upper().replace("-", "").replace("_", ""))
@@ -136,30 +193,245 @@ def _apply_ph_adjustment(params: Dict[str, Any], chemical: Optional[str]) -> Dic
         return dict(params)
     adjusted = dict(params)
     for ion, factor in rules.items():
-        current = float(adjusted.get(ion, 0.0))
-        # Apply a nominal 1-unit adjustment signal (actual dose handled by fixed_ph override)
-        adjusted[ion] = max(0.0, current + factor)
+        entry = adjusted.get(ion)
+        if isinstance(entry, dict):
+            current = float(entry.get("value", 0.0))
+            adjusted[ion] = {**entry, "value": max(0.0, current + factor)}
+        else:
+            current = float(entry) if entry is not None else 0.0
+            adjusted[ion] = max(0.0, current + factor)
     return adjusted
 
 
-def _color_code(si: float, max_si: float, band_lower: float, band_upper: float) -> str:
-    if si < max_si:
-        return "green"
-    if si <= band_upper:
-        return "yellow"
-    return "red"
-
-
-def _parse_thresholds(raw_material_chemistry: Optional[Dict]) -> Dict[str, float]:
-    """Extract color band thresholds from raw_material_chemistry."""
+def _get_inhibited_salts(raw_material_chemistry: Optional[Dict]) -> List[str]:
+    """
+    Extract list of salt names that this raw material inhibits.
+    From inhibitionFormulas[].salToInhibit
+    """
     if not raw_material_chemistry:
-        return {"max_si_at_dose": 0.0, "band_lower": 0.0, "band_upper": 0.5}
+        return []
+    formulas = raw_material_chemistry.get("inhibitionFormulas") or []
+    return [f.get("salToInhibit", "") for f in formulas if f.get("salToInhibit")]
+
+
+def _color_code_for_salt(
+    si: float,
+    salt_name: str,
+    inhibited_salts: List[str],
+    thresholds: Dict[str, Any],
+) -> str:
+    """
+    Client color logic:
+
+    IF raw material inhibits this salt:
+        green  → SI < yellow_lower  (treatment working)
+        yellow → yellow_lower ≤ SI ≤ yellow_upper  (caution)
+        red    → SI > yellow_upper  (treatment not working)
+
+    ELSE (no inhibition for this salt):
+        green → SI < 0   (undersaturated, no scaling risk)
+        red   → SI >= 0  (supersaturated, scaling risk)
+    """
+    # Check if this salt is inhibited by the raw material (case-insensitive)
+    salt_lower = salt_name.lower()
+    is_inhibited = any(s.lower() in salt_lower or salt_lower in s.lower()
+                       for s in inhibited_salts if s)
+
+    if is_inhibited:
+        yellow_lower = thresholds.get("yellow_lower", -0.5)
+        yellow_upper = thresholds.get("yellow_upper",  0.5)
+        if si < yellow_lower:
+            return "green"
+        if si <= yellow_upper:
+            return "yellow"
+        return "red"
+    else:
+        # No inhibition data — simple SI < 0 = green, SI >= 0 = red
+        return "green" if si < 0 else "red"
+
+
+def _parse_thresholds(raw_material_chemistry: Optional[Dict], dosage_ppm: float = 2.0) -> Dict[str, Any]:
+    """
+    Extract color band thresholds from raw_material_chemistry.
+
+    Client logic:
+      Dose = f(SI)  →  solve for SI given Dose
+      Example: "Dose = 0.0358 x SI(CaCO3) + 0.5272"
+      → SI_max = (Dose - 0.5272) / 0.0358
+
+      Yellow band = SI_max ± band_cushion%
+      green  → SI < yellow_lower
+      yellow → yellow_lower ≤ SI ≤ yellow_upper
+      red    → SI > yellow_upper
+    """
+    if not raw_material_chemistry:
+        return {
+            "max_si_at_dose": 0.0,
+            "yellow_lower":  -0.5,
+            "yellow_upper":   0.5,
+            "band_lower_pct": 5.0,
+            "band_upper_pct": 5.0,
+            "formula_used":   None,
+        }
 
     def _to_float(v, default=0.0):
         try:
+            if isinstance(v, str):
+                v = v.replace("%", "").strip()
             return float(v)
         except (TypeError, ValueError):
             return default
+
+    band_lower_pct = _to_float(raw_material_chemistry.get("bandLowerCushion"), 5.0)
+    band_upper_pct = _to_float(raw_material_chemistry.get("bandUpperCushion"), 5.0)
+
+    # Try to solve SI_max from inhibition formula
+    si_max = None
+    formula_used = None
+    inhibition_formulas = raw_material_chemistry.get("inhibitionFormulas", [])
+
+    for formula_obj in (inhibition_formulas or []):
+        formula_str = formula_obj.get("formulaForInhibitionPerformance", "")
+        if not formula_str:
+            continue
+        try:
+            import re as _re
+            f = formula_str.replace("x", "*").replace("X", "*").replace("×", "*")
+            # Match: Dose = A * SI + B  or  Dose = A * SI(Salt) + B
+            m = _re.search(r"=\s*([\d.]+)\s*\*?\s*SI[^+\-]*\+\s*([\d.]+)", f)
+            if not m:
+                m = _re.search(r"=\s*([\d.]+)\s*\*?\s*SI[^+\-]*-\s*([\d.]+)", f)
+                if m:
+                    a, b = float(m.group(1)), -float(m.group(2))
+                else:
+                    continue
+            else:
+                a, b = float(m.group(1)), float(m.group(2))
+
+            if a != 0:
+                si_max = (dosage_ppm - b) / a
+                formula_used = formula_str
+                logger.info(f"SI_max from formula at dose={dosage_ppm}: SI_max={si_max:.4f}")
+                break
+        except Exception as e:
+            logger.warning(f"Could not parse inhibition formula '{formula_str}': {e}")
+
+    if si_max is None:
+        si_max = 0.0
+
+    yellow_lower = si_max * (1 - band_lower_pct / 100)
+    yellow_upper = si_max * (1 + band_upper_pct / 100)
+
+    return {
+        "max_si_at_dose":  round(si_max, 4),
+        "yellow_lower":    round(yellow_lower, 4),
+        "yellow_upper":    round(yellow_upper, 4),
+        "band_lower_pct":  band_lower_pct,
+        "band_upper_pct":  band_upper_pct,
+        "formula_used":    formula_used,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CO2 PARTIAL PRESSURE CALCULATOR
+# Based on client's tower type table
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Adjustment tables from client spec
+_CO2_AIRFLOW_ADJ: Dict[str, float] = {
+    "counterflow": 0.0,
+    "crossflow":   0.15,
+}
+
+_CO2_FILL_ADJ: Dict[str, float] = {
+    "film fill - high-efficiency": -0.1,
+    "film fill high efficiency":   -0.1,
+    "film fill - standard":         0.0,
+    "film fill standard":           0.0,
+    "splash fill":                  0.2,
+    "splash":                       0.2,
+}
+
+_CO2_DRAFT_ADJ: Dict[str, float] = {
+    "forced draft":  0.0,
+    "induced draft": -0.05,
+    "natural draft":  0.15,
+}
+
+
+def _calculate_co2_factor(
+    system_type: Optional[str],
+    tower_type: Optional[str],
+    fill_type: Optional[str],
+    draft_type: Optional[str],
+    approach_to_wb: Optional[float],
+    co2_override: Optional[float],
+) -> Optional[float]:
+    """
+    Calculate CO2(g) log partial pressure for EQUILIBRIUM_PHASES.
+
+    Returns:
+        float  → use this value in EQUILIBRIUM_PHASES CO2(g) <value> 100.0
+        None   → Once Through Cooling, skip EQUILIBRIUM_PHASES entirely
+    """
+    # Manual override takes priority
+    if co2_override is not None:
+        return co2_override
+
+    sys = (system_type or "").lower().strip()
+
+    # Once Through Cooling → no equilibrium phase
+    if "once" in sys and "through" in sys:
+        return None
+
+    # Evaporative Condenser → base only, no correction
+    if "evaporative" in sys or "condenser" in sys:
+        return -3.4
+
+    # Cooling Tower → apply corrections
+    base = -3.4
+
+    # Airflow type
+    airflow_key = (tower_type or "").lower().strip()
+    base += _CO2_AIRFLOW_ADJ.get(airflow_key, 0.0)
+
+    # Fill type
+    fill_key = (fill_type or "").lower().strip()
+    base += _CO2_FILL_ADJ.get(fill_key, 0.0)
+
+    # Draft type
+    draft_key = (draft_type or "").lower().strip()
+    base += _CO2_DRAFT_ADJ.get(draft_key, 0.0)
+
+    # Approach to WB
+    if approach_to_wb is not None:
+        if approach_to_wb < 5:
+            base += -0.1
+        elif approach_to_wb <= 10:
+            base += 0.0
+        elif approach_to_wb <= 15:
+            base += 0.1
+        else:
+            base += 0.2
+
+    logger.info(
+        f"CO2 factor: base=-3.4 → {base:.2f} "
+        f"(airflow={tower_type}, fill={fill_type}, draft={draft_type}, approach={approach_to_wb}°F)"
+    )
+    return round(base, 2)
+
+
+def _f_to_c(f: float) -> float:
+    """Fahrenheit to Celsius."""
+    return round((f - 32) * 5 / 9, 2)
+
+
+def _to_celsius(value: float, unit: str) -> float:
+    """Convert temperature to Celsius."""
+    u = (unit or "").strip().upper()
+    if u in ("F", "°F"):
+        return _f_to_c(value)
+    return round(value, 2)
 
     return {
         "max_si_at_dose": 0.0,
@@ -173,16 +445,19 @@ def _parse_thresholds(raw_material_chemistry: Optional[Dict]) -> Dict[str, float
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SaturationService:
+    """
+    Orchestrates the full saturation analysis pipeline using client's
+    exact 2-step PHREEQC workflow per CoC value.
+    """
 
     COLOUR_MAP = _COLOUR_HEX
 
     def __init__(self):
-        self.phreeqc = PHREEQCService()
-        # Support both AWS_S3_BUCKET_NAME and AWS_S3_BUCKET (common naming variants)
-        self.s3_bucket  = os.getenv("AWS_S3_BUCKET_NAME") or os.getenv("AWS_S3_BUCKET", "")
-        self.s3_region  = os.getenv("AWS_REGION", "us-east-1")
-        self.s3_prefix  = os.getenv("AWS_S3_SATURATION_PREFIX", "saturation-graphs/")
-        self._s3 = None
+        self.phreeqc   = PHREEQCService()
+        self.s3_bucket = os.getenv("AWS_S3_BUCKET_NAME") or os.getenv("AWS_S3_BUCKET", "")
+        self.s3_region = os.getenv("AWS_REGION", "us-east-1")
+        self.s3_prefix = os.getenv("AWS_S3_SATURATION_PREFIX", "saturation-graphs/")
+        self._s3       = None
 
     def _get_s3(self):
         if self._s3 is None:
@@ -194,129 +469,227 @@ class SaturationService:
             )
         return self._s3
 
-    # ── STEP: build grid ─────────────────────────────────────────────────────
+    # ── Build CoC list ────────────────────────────────────────────────────────
     @staticmethod
-    def _build_grid(
-        coc_min: float, coc_max: float, coc_interval: float,
-        temp_min: float, temp_max: float, temp_interval: float,
-        temp_unit: str, ph_mode: str, fixed_ph: Optional[float], base_ph: float,
-    ) -> List[Dict[str, float]]:
-        def f2c(f): return round((f - 32) * 5 / 9, 2)
-
-        coc_vals, c = [], coc_min
+    def _build_coc_list(coc_min: float, coc_max: float, coc_interval: float) -> List[float]:
+        """Return list of CoC values from min to max with given interval."""
+        vals, c = [], coc_min
+        interval = max(coc_interval, 0.01)
         while c <= coc_max + 1e-9:
-            coc_vals.append(round(c, 4)); c += coc_interval
+            vals.append(round(c, 4))
+            c += interval
+        if not vals:
+            vals = [coc_min]
+        return vals
 
-        temp_vals, t = [], temp_min
-        while t <= temp_max + 1e-9:
-            temp_vals.append(f2c(t) if temp_unit.upper() == "F" else round(t, 2))
-            t += temp_interval
-
-        use_fixed = ph_mode.lower() == "fixed" and fixed_ph is not None
-        grid = []
-        for coc in coc_vals:
-            for temp in temp_vals:
-                grid.append({"CoC": coc, "temp": temp, "pH": fixed_ph if use_fixed else base_ph})
-
-        logger.info(f"Grid: {len(coc_vals)} CoC × {len(temp_vals)} Temp = {len(grid)} points")
-        return grid
-
-    # ── STEP: run PHREEQC + color code ───────────────────────────────────────
-    async def _run_and_color(
+    # ── Step 1-3: CO2 equilibration at cold basin temp ────────────────────────
+    async def _step1_natural_ph(
         self,
         mapped_params: Dict[str, Any],
-        grid: List[Dict[str, float]],
+        coc: float,
+        cold_temp_c: float,
+        co2_factor: Optional[float],
+        database: str,
+    ) -> float:
+        """
+        Run PHREEQC at cold basin temperature with CO2 equilibration.
+        Returns the natural pH after CO2 degassing.
+        Minerals multiplied by CoC (except pH, Temperature, pe).
+        """
+        if co2_factor is None:
+            return float(_get_ion_value(mapped_params, "pH") or 7.0)
+
+        concentrated = {}
+        skip_keys = {"pH", "Temperature", "pe"}
+        for k, v in mapped_params.items():
+            if k in skip_keys:
+                concentrated[k] = v
+            elif isinstance(v, dict):
+                concentrated[k] = {**v, "value": v["value"] * coc}
+            else:
+                concentrated[k] = float(v) * coc
+
+        concentrated["Temperature"] = {"value": cold_temp_c, "unit": "°C"}
+
+        try:
+            result = await self.phreeqc.run_step1_co2_equilibration(
+                concentrated, co2_factor, database
+            )
+            natural_ph = result.get("pH", _get_ion_value(mapped_params, "pH") or 7.0)
+            logger.debug(f"  CoC={coc} cold={cold_temp_c}°C → natural pH={natural_ph:.3f}")
+            return float(natural_ph)
+        except Exception as e:
+            logger.warning(f"Step 1-3 CO2 eq failed for CoC={coc}: {e}")
+            return float(_get_ion_value(mapped_params, "pH") or 7.0)
+
+    # ── Step 5-6: Final SI calculation at hot evaluation temp ─────────────────
+    async def _step5_hot_temp_si(
+        self,
+        mapped_params: Dict[str, Any],
+        coc: float,
+        hot_temp_c: float,
+        natural_ph: float,
+        balance_anion: str,
+        database: str,
+    ) -> Dict[str, Any]:
+        """
+        Run PHREEQC at hot evaluation temperature with natural pH and Cl charge balance.
+        Minerals multiplied by CoC.
+        """
+        concentrated = {}
+        skip_keys = {"pH", "Temperature", "pe"}
+        for k, v in mapped_params.items():
+            if k in skip_keys:
+                concentrated[k] = v
+            elif isinstance(v, dict):
+                concentrated[k] = {**v, "value": v["value"] * coc}
+            else:
+                concentrated[k] = float(v) * coc
+
+        concentrated["pH"]          = {"value": natural_ph, "unit": ""}
+        concentrated["Temperature"] = {"value": hot_temp_c,  "unit": "°C"}
+
+        try:
+            result = await self.phreeqc.run_step5_hot_temp(
+                concentrated, natural_ph, hot_temp_c, balance_anion, database
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Step 5-6 failed for CoC={coc}, temp={hot_temp_c}°C: {e}")
+            return {"saturation_indices": [], "ionic_strength": 0.0,
+                    "charge_balance_error_pct": 0.0, "description_of_solution": {}}
+
+    # ── STEP: run full 2-step pipeline per CoC × Temperature ─────────────────
+    async def _run_two_step_pipeline(
+        self,
+        mapped_params: Dict[str, Any],
+        coc_list: List[float],
+        cold_temp_c: float,
+        temp_list_c: List[float],
+        co2_factor: Optional[float],
         salt_id: Optional[str],
         salts_of_interest: Optional[List[str]],
-        thresholds: Dict[str, float],
+        thresholds: Dict[str, Any],
+        inhibited_salts: List[str],
         balance_cation: str,
         balance_anion: str,
     ) -> Tuple[List[Dict[str, Any]], str]:
-
-        # Select database
-        coc_vals  = [p["CoC"]  for p in grid]
-        temp_vals = [p["temp"] for p in grid]
-        ph_vals   = [p["pH"]   for p in grid]
+        """
+        Client pseudo-code:
+          Do CurrentTemp = temp_min to temp_max
+            Do CoC = coc_min to coc_max
+              Step 1: supply_temp + CO2 eq → natural pH
+              Step 2: CurrentTemp + natural pH + Cl charge → SI
+            Loop
+          Loop
+        """
+        # Select database based on highest CoC + highest temp
+        max_coc  = max(coc_list)
+        max_temp = max(temp_list_c)
 
         database = self.phreeqc.select_database(
-            mapped_params,
-            ph_range=(min(ph_vals), max(ph_vals)),
-            coc_range=(min(coc_vals), max(coc_vals)),
-            temp_range=(min(temp_vals), max(temp_vals)),
+            {k: v["value"] if isinstance(v, dict) else v for k, v in mapped_params.items()},
+            ph_range=(6.0, 10.0),
+            coc_range=(min(coc_list), max_coc),
+            temp_range=(cold_temp_c, max_temp),
         )
         db_name = os.path.basename(database)
+        logger.info(f"Database selected: {db_name}")
 
-        # Ion balance
-        try:
-            balanced = await self.phreeqc.ion_balance(
-                mapped_params, cation_ion=balance_cation,
-                anion_ion=balance_anion, database=database,
-            )
-        except Exception as e:
-            logger.warning(f"Ion balance failed ({e}), using unbalanced params")
-            balanced = mapped_params
-
-        # Batch PHREEQC
-        raw_results = await self.phreeqc.run_batch_solution_spread(balanced, grid, database)
-
-        # Determine which salt to use for color coding
         color_salt = salt_id or (salts_of_interest[0] if salts_of_interest else None)
+        results: List[Dict[str, Any]] = []
 
-        colored: List[Dict[str, Any]] = []
-        for res in raw_results:
-            # Build full SI detail dict — normalize mineral names to title-case for consistency
-            si_detail: Dict[str, Any] = {}
-            for item in res.get("saturation_indices", []):
-                if isinstance(item, dict):
-                    name = item.get("mineral_name", "")
-                    si_detail[name] = {
-                        "SI":              round(item.get("si_value", 0.0), 4),
-                        "log_IAP":         item.get("log_IAP"),
-                        "log_K":           item.get("log_K"),
-                        "phase":           item.get("phase"),
-                        "chemical_formula": item.get("chemical_formula"),
-                    }
+        # Cache natural pH per CoC (Step 1 only depends on CoC, not evaluation temp)
+        natural_ph_cache: Dict[float, float] = {}
 
-            # Case-insensitive lookup helper
-            def _find_si(si_dict: Dict, target: Optional[str]) -> Optional[float]:
-                if not target:
-                    return None
-                # exact match first
-                if target in si_dict:
-                    return si_dict[target].get("SI")
-                # case-insensitive fallback
-                target_lower = target.lower()
-                for k, v in si_dict.items():
-                    if k.lower() == target_lower:
-                        return v.get("SI")
-                return None
+        total = len(temp_list_c) * len(coc_list)
+        done  = 0
 
-            # Color code based on selected salt (case-insensitive)
-            selected_si = _find_si(si_detail, color_salt)
-            if selected_si is not None:
-                color = _color_code(
-                    selected_si,
-                    thresholds["max_si_at_dose"],
-                    thresholds["band_lower"],
-                    thresholds["band_upper"],
+        for hot_temp_c in temp_list_c:
+            for coc in coc_list:
+                done += 1
+                logger.info(f"[{done}/{total}] CoC={coc}, eval_temp={hot_temp_c}°C ...")
+
+                # ── Step 1: natural pH at cold supply temp (cached per CoC) ──
+                if coc not in natural_ph_cache:
+                    natural_ph = await self._step1_natural_ph(
+                        mapped_params, coc, cold_temp_c, co2_factor, database
+                    )
+                    natural_ph_cache[coc] = natural_ph
+                else:
+                    natural_ph = natural_ph_cache[coc]
+
+                # ── Step 2: SI at evaluation temp ─────────────────────────────
+                phreeqc_result = await self._step5_hot_temp_si(
+                    mapped_params, coc, hot_temp_c, natural_ph, balance_anion, database
                 )
-            else:
-                color = "green"  # no salt selected → neutral
 
-            colored.append({
-                "_grid_CoC":              res.get("_grid_CoC", 0.0),
-                "_grid_temp":             res.get("_grid_temp", 0.0),
-                "_grid_pH":               res.get("_grid_pH", 0.0),
-                "saturation_indices":     si_detail,
-                "description_of_solution": res.get("description_of_solution"),
-                "distribution_of_species": res.get("distribution_of_species", {}),
-                "color_code":             color,
-                "ionic_strength":         res.get("ionic_strength", 0.0),
-                "charge_balance_error_pct": res.get("charge_balance_error_pct", 0.0),
-                "electrical_balance":     res.get("electrical_balance", 0.0),
-            })
+                # Build SI detail dict + SR (Saturation Ratio = 10^SI)
+                si_detail: Dict[str, Any] = {}
+                for item in phreeqc_result.get("saturation_indices", []):
+                    if isinstance(item, dict):
+                        name    = item.get("mineral_name", "")
+                        si_val  = round(item.get("si_value", 0.0), 4)
+                        si_detail[name] = {
+                            "SI":               si_val,
+                            "SR":               round(10 ** si_val, 6),
+                            "log_IAP":          item.get("log_IAP"),
+                            "log_K":            item.get("log_K"),
+                            "phase":            item.get("phase"),
+                            "chemical_formula": item.get("chemical_formula"),
+                        }
 
-        return colored, db_name
+                # Color code — per salt, 2-mode logic
+                def _find_si_val(si_dict: Dict, target: Optional[str]) -> Optional[float]:
+                    if not target:
+                        return None
+                    if target in si_dict:
+                        return si_dict[target].get("SI")
+                    tl = target.lower()
+                    for k, v in si_dict.items():
+                        if k.lower() == tl:
+                            return v.get("SI")
+                    return None
+
+                selected_si = _find_si_val(si_detail, color_salt)
+
+                # Color for the primary/selected salt
+                if selected_si is not None:
+                    color = _color_code_for_salt(
+                        selected_si, color_salt or "", inhibited_salts, thresholds
+                    )
+                else:
+                    color = "green"
+
+                # Per-salt color map (for frontend to switch views)
+                per_salt_colors: Dict[str, str] = {}
+                for mineral_name, mineral_data in si_detail.items():
+                    per_salt_colors[mineral_name] = _color_code_for_salt(
+                        mineral_data["SI"], mineral_name, inhibited_salts, thresholds
+                    )
+
+                desc = phreeqc_result.get("description_of_solution", {})
+
+                results.append({
+                    "_grid_CoC":               coc,
+                    "_grid_temp":              hot_temp_c,
+                    "_grid_pH":                natural_ph,
+                    "_cold_temp_c":            cold_temp_c,
+                    "_natural_ph_at_cold":     natural_ph,
+                    "saturation_indices":      si_detail,
+                    "description_of_solution": desc,
+                    "distribution_of_species": phreeqc_result.get("distribution_of_species", {}),
+                    "color_code":              color,           # color for selected salt
+                    "per_salt_colors":         per_salt_colors, # color for every salt
+                    "ionic_strength":          phreeqc_result.get("ionic_strength", 0.0),
+                    "charge_balance_error_pct": phreeqc_result.get("charge_balance_error_pct", 0.0),
+                    "electrical_balance":      phreeqc_result.get("electrical_balance", 0.0),
+                    "specific_conductance":    desc.get("specific_conductance"),
+                    "density":                 desc.get("density"),
+                })
+
+        logger.info(f"Pipeline complete: {len(results)} grid points ({len(temp_list_c)} temps × {len(coc_list)} CoC)")
+        return results, db_name
 
     # ── STEP: generate 3D graph ───────────────────────────────────────────────
     def _generate_graph(
@@ -360,7 +733,18 @@ class SaturationService:
                 r["saturation_indices"].get(first_salt, {}).get("SI", 0.0) for r in valid
             ])
 
-        colors = [self.COLOUR_MAP.get(r["color_code"], "#BDC3C7") for r in valid]
+        colors = [
+            self.COLOUR_MAP.get(
+                r.get("per_salt_colors", {}).get(
+                    # find exact or case-insensitive match
+                    next((k for k in r.get("per_salt_colors", {}) if k.lower() == (salt_id or "").lower()), None
+                    ) or r.get("color_code", "green"),
+                    r.get("color_code", "green")
+                ),
+                "#BDC3C7"
+            )
+            for r in valid
+        ]
 
         # Convert temp for display label
         y_label = "Temperature (°C)"
@@ -1112,106 +1496,211 @@ class SaturationService:
         return counts
 
     # ─────────────────────────────────────────────────────────────────────────
+    # ADDITIONAL CALCULATIONS PER GRID POINT
+    # ─────────────────────────────────────────────────────────────────────────
+    async def _add_calculations_to_results(
+        self,
+        results: List[Dict[str, Any]],
+        raw_water: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """
+        For each grid point, calculate:
+          - LSI, RSI (Ryznar), PSI (Puckorius)
+          - CCPP
+          - Mild Steel Corrosion Rate
+        Uses the grid point's pH, temp, ionic_strength + base water params.
+        """
+        try:
+            from app.services.calculation_service import CalculationService
+            calc = CalculationService()
+        except Exception as e:
+            logger.warning(f"CalculationService unavailable: {e}")
+            return results
+
+        for r in results:
+            try:
+                # Build parameters dict for this grid point
+                # Use base water params + override pH and Temperature from grid
+                params: Dict[str, Any] = {}
+                for k, v in raw_water.items():
+                    params[k] = v
+
+                # Override with grid point values
+                params["pH"]          = {"value": r["_grid_pH"],   "unit": ""}
+                params["Temperature"] = {"value": r["_grid_temp"],  "unit": "°C"}
+
+                # Build phreeqc_output dict for CCPP
+                phreeqc_output = {
+                    "ionic_strength":     r.get("ionic_strength", 0.0),
+                    "saturation_indices": [
+                        {"mineral_name": k, "si_value": v.get("SI", 0.0)}
+                        for k, v in r.get("saturation_indices", {}).items()
+                    ],
+                }
+
+                ionic_strength = r.get("ionic_strength", 0.0)
+
+                # Run calculations
+                calcs: Dict[str, Any] = {}
+
+                try:
+                    calcs["lsi"] = await calc.calculate_lsi(params)
+                except Exception:
+                    pass
+
+                try:
+                    calcs["ryznar"] = await calc.calculate_ryznar(params)
+                except Exception:
+                    pass
+
+                try:
+                    calcs["puckorius"] = await calc.calculate_puckorius(params)
+                except Exception:
+                    pass
+
+                try:
+                    calcs["ccpp"] = await calc.calculate_ccpp(phreeqc_output)
+                except Exception:
+                    pass
+
+                try:
+                    calcs["larson_skold"] = await calc.calculate_larson_skold(params)
+                except Exception:
+                    pass
+
+                try:
+                    sat_indices_dict = {
+                        item["mineral_name"]: item["si_value"]
+                        for item in phreeqc_output["saturation_indices"]
+                    }
+                    calcs["mild_steel_corrosion"] = await calc.calculate_mild_steel_corrosion(
+                        params, sat_indices_dict, do_ppm=5.0,
+                        temp_c=r["_grid_temp"]
+                    )
+                except Exception:
+                    pass
+
+                r["calculations"] = calcs
+
+            except Exception as e:
+                logger.warning(f"Calculations failed for CoC={r.get('_grid_CoC')}: {e}")
+                r["calculations"] = {}
+
+        return results
+
+    # ─────────────────────────────────────────────────────────────────────────
     # PUBLIC: run_analysis
     # ─────────────────────────────────────────────────────────────────────────
     async def run_analysis(self, req: Dict[str, Any]) -> Dict[str, Any]:
         run_id = str(uuid.uuid4())
         logger.info(f"Saturation run started  run_id={run_id}")
 
-        # 1. Map dynamic water params
+        # ── 1. Map dynamic water params ───────────────────────────────────────
         raw_water = req.get("base_water_parameters", {})
         mapped    = _map_water_params(raw_water)
         if not mapped:
             raise ValueError("base_water_parameters could not be mapped to any known ions")
 
-        base_ph = float(mapped.get("pH", 7.0))
-        # Validate pH — must be in realistic range (4–11)
-        if base_ph < 4.0 or base_ph > 11.0:
-            logger.warning(f"pH value {base_ph} is outside realistic range (4–11), defaulting to 7.0")
-            base_ph = 7.0
-            mapped["pH"] = 7.0
+        base_ph = float(_get_ion_value(mapped, "pH") or 7.0)
 
-        # Validate temperature unit consistency
-        temp_min = float(req.get("temp_min") or 25.0)
-        temp_max = float(req.get("temp_max") or 60.0)
-        temp_unit_req = req.get("temp_unit", "C").upper()
-        if temp_unit_req == "F":
-            # Sanity check: F values should be > 32
-            if temp_min < 32 or temp_max < 32:
-                logger.warning(f"temp_unit=F but temp_min={temp_min}, temp_max={temp_max} look like Celsius. Auto-correcting to C.")
-                # Override to treat as Celsius
-                req = dict(req)
-                req["temp_unit"] = "C"
-        elif temp_unit_req == "C":
-            # Sanity check: C values should be < 200
-            if temp_min > 200 or temp_max > 200:
-                logger.warning(f"temp_unit=C but temp_min={temp_min}, temp_max={temp_max} look like Fahrenheit. Auto-correcting to F.")
-                req = dict(req)
-                req["temp_unit"] = "F"
-
-        # 2. pH adjustment
+        # ── 2. pH adjustment chemical ─────────────────────────────────────────
         mapped = _apply_ph_adjustment(mapped, req.get("adjustment_chemical"))
 
-        # 3. Thresholds from raw_material_chemistry
-        thresholds = _parse_thresholds(req.get("raw_material_chemistry"))
+        # ── 3. Thresholds from raw_material_chemistry ─────────────────────────
+        dosage_ppm = float(req.get("dosage_ppm") or 2.0)
+        thresholds = _parse_thresholds(req.get("raw_material_chemistry"), dosage_ppm)
 
-        # 4. Build grid
-        grid = self._build_grid(
-            coc_min=float(req.get("coc_min") or 1.0),
-            coc_max=float(req.get("coc_max") or 10.0),
-            coc_interval=float(req.get("coc_interval") or 1.0),
-            temp_min=float(req.get("temp_min") or 25.0),
-            temp_max=float(req.get("temp_max") or 60.0),
-            temp_interval=float(req.get("temp_interval") or 5.0),
-            temp_unit=req.get("temp_unit", "F"),
-            ph_mode=req.get("ph_mode", "natural"),
-            fixed_ph=req.get("fixed_ph"),
-            base_ph=base_ph,
+        # ── 4. Resolve temperatures ───────────────────────────────────────────
+        asset_info = req.get("asset_info") or {}
+
+        # Cold basin temp (Step 1-3) — from asset supplyTemperature or temp_min
+        cold_temp_raw  = asset_info.get("supplyTemperature") or req.get("temp_min") or 32.2
+        cold_temp_unit = asset_info.get("supplyTemperatureType") or req.get("temp_unit") or "°F"
+        cold_temp_c    = _to_celsius(float(cold_temp_raw), cold_temp_unit)
+
+        # Hot evaluation temp (Step 5-6) — from asset returnTemperature or temp_max
+        hot_temp_raw   = asset_info.get("returnTemperature") or req.get("temp_max") or 55.0
+        hot_temp_unit  = asset_info.get("returnTemperatureType") or req.get("temp_unit") or "°F"
+        hot_temp_c     = _to_celsius(float(hot_temp_raw), hot_temp_unit)
+
+        # Sanity check: hot temp must be > cold temp
+        # If inverted, swap them (common data entry error)
+        if hot_temp_c < cold_temp_c:
+            logger.warning(
+                f"Hot temp ({hot_temp_c}°C) < cold temp ({cold_temp_c}°C) — "
+                f"likely unit mismatch. Swapping."
+            )
+            cold_temp_c, hot_temp_c = hot_temp_c, cold_temp_c
+
+        logger.info(f"Temperatures: cold={cold_temp_c}°C, hot={hot_temp_c}°C")
+
+        # ── 5. CO2 factor ─────────────────────────────────────────────────────
+        approach_to_wb = asset_info.get("approachToWB")
+        if approach_to_wb is None:
+            # Estimate: cold supply temp - wet bulb (assume 5-10°F range if unknown)
+            approach_to_wb = 7.0
+
+        co2_factor = _calculate_co2_factor(
+            system_type    = asset_info.get("type") or asset_info.get("systemType"),
+            tower_type     = asset_info.get("towerType"),
+            fill_type      = asset_info.get("fillType"),
+            draft_type     = asset_info.get("draftType"),
+            approach_to_wb = float(approach_to_wb),
+            co2_override   = req.get("co2_log_partial_pressure"),
         )
+        logger.info(f"CO2 factor: {co2_factor}")
 
-        # 5. PHREEQC batch + color
+        # ── 6. Build CoC list ─────────────────────────────────────────────────
+        coc_min      = float(req.get("coc_min") or 1.0)
+        coc_max      = float(req.get("coc_max") or 10.0)
+        coc_interval = float(req.get("coc_interval") or 1.0)
+        coc_list     = self._build_coc_list(coc_min, coc_max, coc_interval)
+        logger.info(f"CoC list: {coc_list}")
+
+        # ── 7. Build evaluation temperature list ──────────────────────────────
+        # Client: Do CurrentTemp = temp_min to temp_max (step temp_interval)
+        temp_unit = req.get("temp_unit", "F")
+        temp_min_raw  = float(req.get("temp_min") or 110.0)
+        temp_max_raw  = float(req.get("temp_max") or 160.0)
+        temp_interval = float(req.get("temp_interval") or 10.0)
+
+        # Build temp list in °C
+        temp_list_c: List[float] = []
+        t = temp_min_raw
+        while t <= temp_max_raw + 1e-9:
+            temp_list_c.append(_to_celsius(t, temp_unit))
+            t += max(temp_interval, 0.1)
+
+        if not temp_list_c:
+            temp_list_c = [hot_temp_c]  # fallback to asset return temp
+
+        logger.info(f"Eval temp list (°C): {temp_list_c}")
+        logger.info(f"Grid: {len(coc_list)} CoC × {len(temp_list_c)} Temp = {len(coc_list)*len(temp_list_c)} points")
+
+        # ── 8. Run 2-step PHREEQC pipeline (Temp × CoC grid) ─────────────────
         salt_id           = req.get("salt_id")
         salts_of_interest = req.get("salts_of_interest")
+        inhibited_salts   = _get_inhibited_salts(req.get("raw_material_chemistry"))
+        logger.info(f"Inhibited salts: {inhibited_salts}")
 
-        # Run ion balance separately so we can report it
-        ion_balance_info: Dict[str, Any] = {}
-        try:
-            from app.services.phreeqc_service import PHREEQCService as _PHREEQC
-            _db_for_balance = self.phreeqc.select_database(
-                mapped,
-                ph_range=(base_ph, base_ph),
-                coc_range=(float(req.get("coc_min") or 1.0), float(req.get("coc_max") or 10.0)),
-                temp_range=(float(req.get("temp_min") or 25.0), float(req.get("temp_max") or 60.0)),
-            )
-            _balanced = await self.phreeqc.ion_balance(
-                mapped,
-                cation_ion=req.get("balance_cation", "Na"),
-                anion_ion=req.get("balance_anion", "Cl"),
-                database=_db_for_balance,
-            )
-            ion_balance_info = {
-                "balanced":        _balanced.get("_ion_balanced", False),
-                "iterations":      _balanced.get("_balance_iterations", 0),
-                "final_error_pct": _balanced.get("_charge_balance_error", None),
-                "adjustments":     _balanced.get("_ion_adjustments", []),
-            }
-        except Exception as _e:
-            logger.warning(f"Ion balance report failed (non-fatal): {_e}")
-            ion_balance_info = {"balanced": False, "error": str(_e)}
-
-        results, db_used = await self._run_and_color(
-            mapped_params=mapped,
-            grid=grid,
-            salt_id=salt_id,
-            salts_of_interest=salts_of_interest,
-            thresholds=thresholds,
-            balance_cation=req.get("balance_cation", "Na"),
-            balance_anion=req.get("balance_anion", "Cl"),
+        results, db_used = await self._run_two_step_pipeline(
+            mapped_params     = mapped,
+            coc_list          = coc_list,
+            cold_temp_c       = cold_temp_c,
+            temp_list_c       = temp_list_c,
+            co2_factor        = co2_factor,
+            salt_id           = salt_id,
+            salts_of_interest = salts_of_interest,
+            thresholds        = thresholds,
+            inhibited_salts   = inhibited_salts,
+            balance_cation    = req.get("balance_cation", "Na"),
+            balance_anion     = req.get("balance_anion", "Cl"),
         )
 
-        # 6. Resolve effective salt (case-insensitive match)
-        temp_unit = req.get("temp_unit", "F")
+        # ── 9. Add additional calculations per grid point ─────────────────────
+        results = await self._add_calculations_to_results(results, raw_water)
 
+        # ── 10. Resolve effective salt (case-insensitive) ─────────────────────
         effective_salt = salt_id
         if results:
             sample_si = results[0].get("saturation_indices", {})
@@ -1221,83 +1710,55 @@ class SaturationService:
             if salt_id:
                 found = any(k.lower() == salt_id.lower() for k in available)
                 if not found:
-                    logger.warning(
-                        f"salt_id '{salt_id}' not found in PHREEQC results. "
-                        f"Available: {available[:10]}. Falling back to first available."
-                    )
+                    logger.warning(f"salt_id '{salt_id}' not found. Available: {available[:10]}. Using first.")
                     effective_salt = available[0] if available else None
                 else:
                     effective_salt = next(k for k in available if k.lower() == salt_id.lower())
             else:
                 effective_salt = available[0] if available else None
-
-        # 7. Enrich grid points with indices, water balance, chemical, corrosion
-        logger.info("📊 Enriching grid points with calculations...")
+        temp_unit = req.get("temp_unit", "F")
+        graph_url = "not-generated"
         try:
-            results = await self._enrich_grid_points(results, raw_water, req)
+            png       = self._generate_graph(results, effective_salt, run_id, temp_unit)
+            graph_url = self._upload_s3(png, run_id)
         except Exception as e:
-            logger.warning(f"Enrichment failed (non-fatal): {e}")
+            logger.warning(f"Graph generation/upload failed (non-fatal): {e}")
 
-        # 8. Build interactive chart data (no image, no S3)
-        chart_data = self._build_chart_data(results, effective_salt, temp_unit)
+        # ── 10. Build Plotly-ready graph_data ─────────────────────────────────
+        graph_data = self._build_graph_data(results, effective_salt, temp_unit)
 
-        # 8. Summary
+        # ── 11. Summary ───────────────────────────────────────────────────────
         summary = self._summary(results)
 
-        def _f(val, default):
-            """Safe float conversion — returns default if val is None."""
-            try:
-                return float(val) if val is not None else float(default)
-            except (TypeError, ValueError):
-                return float(default)
-
-        # 9. Save to DB
+        # ── 12. Save to DB ────────────────────────────────────────────────────
         doc = {
-            "run_id":             run_id,
-            "salt_id":            effective_salt,
-            "salts_of_interest":  salts_of_interest,
-            "dosage_ppm":         _f(req.get("dosage_ppm"), 2.0),
-            "coc_min":            _f(req.get("coc_min"),    1.0),
-            "coc_max":            _f(req.get("coc_max"),    10.0),
-            "coc_interval":       _f(req.get("coc_interval"),1.0),
-            "temp_min":           _f(req.get("temp_min"),   25.0),
-            "temp_max":           _f(req.get("temp_max"),   60.0),
-            "temp_interval":      _f(req.get("temp_interval"),5.0),
-            "temp_unit":          temp_unit,
-            "ph_mode":            req.get("ph_mode", "natural"),
-            "fixed_ph":           req.get("fixed_ph"),
-            "adjustment_chemical": req.get("adjustment_chemical"),
-            "balance_cation":     req.get("balance_cation", "Na"),
-            "balance_anion":      req.get("balance_anion", "Cl"),
-            "database_used":      db_used,
-            "total_grid_points":  len(results),
-            "grid_results":       results,
-            "chart_data":         chart_data,
-            "summary":            summary,
-            "thresholds":         thresholds,
-            "base_water_parameters": raw_water,
-            "product_blend":      req.get("product_blend"),
-            "raw_material_chemistry": req.get("raw_material_chemistry"),
-            "asset_info":         req.get("asset_info"),
-            # Report metadata
-            "report_name":        req.get("report_name"),
-            "customer_id":        req.get("customer_id"),
-            "customer_name":      req.get("customer_name"),
-            "asset_id":           req.get("asset_id"),
-            "location":           req.get("location"),
-            "created_at":         datetime.now(timezone.utc).isoformat(),
-            # Ion balance report
-            "ion_balance_report": {
-                **ion_balance_info,
-                "balance_cation":    req.get("balance_cation", "Na"),
-                "balance_anion":     req.get("balance_anion", "Cl"),
-                "explanation": (
-                    "Ion balance adjusts Na+ (cation) or Cl- (anion) concentration "
-                    "to achieve charge balance (error < 5%). "
-                    "Positive electrical balance → anion increased. "
-                    "Negative electrical balance → cation increased."
-                ),
-            },
+            "run_id":                  run_id,
+            "salt_id":                 effective_salt,
+            "salts_of_interest":       salts_of_interest,
+            "dosage_ppm":              float(req.get("dosage_ppm") or 2.0),
+            "coc_min":                 coc_min,
+            "coc_max":                 coc_max,
+            "coc_interval":            coc_interval,
+            "cold_basin_temp_c":       cold_temp_c,
+            "hot_basin_temp_c":        hot_temp_c,
+            "temp_unit":               temp_unit,
+            "ph_mode":                 req.get("ph_mode", "natural"),
+            "co2_factor":              co2_factor,
+            "adjustment_chemical":     req.get("adjustment_chemical"),
+            "balance_cation":          req.get("balance_cation", "Na"),
+            "balance_anion":           req.get("balance_anion", "Cl"),
+            "database_used":           db_used,
+            "total_grid_points":       len(results),
+            "grid_results":            results,
+            "graph_url":               graph_url,
+            "graph_data":              graph_data,
+            "summary":                 summary,
+            "thresholds":              thresholds,
+            "base_water_parameters":   raw_water,
+            "product_blend":           req.get("product_blend"),
+            "raw_material_chemistry":  req.get("raw_material_chemistry"),
+            "asset_info":              asset_info,
+            "created_at":              datetime.now(timezone.utc).isoformat(),
         }
         await db.db["saturation_runs"].insert_one(doc)
         logger.info(f"Saturation run saved  run_id={run_id}  summary={summary}")
@@ -1376,24 +1837,51 @@ class SaturationService:
     # PUBLIC: get_available_salts  (PHREEQC mineral list, cached in MongoDB)
     # ─────────────────────────────────────────────────────────────────────────
     async def get_available_salts(self) -> List[Dict[str, str]]:
-        # Try cache first
-        cached = await db.get_cached_phreeqc_info("default")
+        # Try cache first — use a versioned key so old incomplete caches are ignored
+        cached = await db.get_cached_phreeqc_info("default_v2")
         if cached and cached.get("minerals"):
             return cached["minerals"]
 
-        # Run minimal PHREEQC to get mineral list
+        # Parse all minerals from .dat file (or fallback to PHREEQC run)
         salts = await self._fetch_salts_from_phreeqc()
 
-        # Cache result
-        await db.cache_phreeqc_database_info("default", {"minerals": salts})
+        # Cache result under versioned key
+        await db.cache_phreeqc_database_info("default_v2", {"minerals": salts})
         return salts
 
     async def _fetch_salts_from_phreeqc(self) -> List[Dict[str, str]]:
-        """Run a minimal PHREEQC input and parse all saturation indices returned."""
+        """
+        Fetch ALL minerals/salts from the PHREEQC database.
+
+        Strategy (in order):
+          1. Parse PHASES section directly from phreeqc.dat  ← returns every mineral
+          2. If that yields nothing, also try pitzer.dat
+          3. Fallback: run a minimal PHREEQC simulation and collect SI output
+             (legacy behaviour — only returns minerals relevant to that water chemistry)
+        """
+        # ── Primary: parse .dat file directly ────────────────────────────────
+        salts = self.phreeqc.parse_phases_from_dat_file(self.phreeqc.phreeqc_dat)
+
+        if not salts:
+            # Try pitzer.dat as well (may have additional minerals)
+            logger.info("phreeqc.dat yielded no minerals — trying pitzer.dat")
+            salts = self.phreeqc.parse_phases_from_dat_file(self.phreeqc.pitzer_dat)
+
+        if salts:
+            logger.info(f"✅ Fetched {len(salts)} salts by parsing PHASES section from .dat file")
+            return salts
+
+        # ── Fallback: run minimal PHREEQC simulation ─────────────────────────
+        logger.warning(
+            "Direct .dat PHASES parse returned no results — "
+            "falling back to PHREEQC simulation (may return incomplete salt list)"
+        )
         minimal_params = {
             "pH": 7.0, "Temperature": 25.0,
             "Ca": 100.0, "Mg": 30.0, "Na": 50.0, "K": 5.0,
             "HCO3": 150.0, "SO4": 50.0, "Cl": 50.0, "SiO2": 20.0,
+            # Include trace ions so more minerals appear in SI output
+            "Ba": 0.1, "Sr": 0.1, "Fe": 0.1, "F": 0.1,
         }
         try:
             result = await self.phreeqc._run_phreeqc_single(minimal_params, self.phreeqc.phreeqc_dat)
@@ -1401,12 +1889,12 @@ class SaturationService:
             for item in result.get("saturation_indices", []):
                 if isinstance(item, dict):
                     salts.append({
-                        "name":            item.get("mineral_name", ""),
+                        "name":             item.get("mineral_name", ""),
                         "chemical_formula": item.get("chemical_formula", ""),
-                        "phase":           item.get("phase", ""),
+                        "phase":            item.get("phase", ""),
                     })
-            logger.info(f"Fetched {len(salts)} salts from PHREEQC")
+            logger.info(f"Fallback PHREEQC run returned {len(salts)} salts")
             return salts
         except Exception as e:
-            logger.error(f"Failed to fetch salts from PHREEQC: {e}")
+            logger.error(f"Failed to fetch salts from PHREEQC fallback run: {e}")
             return []

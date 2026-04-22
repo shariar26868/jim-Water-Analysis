@@ -826,6 +826,98 @@ class PHREEQCService:
         return results
 
     # ========================================
+    # PARSE ALL PHASES FROM .DAT FILE DIRECTLY
+    # ========================================
+    def parse_phases_from_dat_file(self, dat_file_path: Optional[str] = None) -> List[Dict[str, str]]:
+        """
+        Parse the PHASES section directly from a PHREEQC .dat database file.
+        This returns ALL minerals defined in the database — not just those
+        that appear in a specific water chemistry run.
+
+        PHREEQC .dat PHASES format:
+            PHASES
+            Calcite
+                CaCO3 = Ca+2 + CO3-2
+                log_k   8.480
+            Gypsum
+                CaSO4:2H2O = Ca+2 + SO4-2 + 2H2O
+                log_k   -4.581
+            ...
+
+        Returns:
+            List of dicts: [{"name": "Calcite", "chemical_formula": "CaCO3", "phase": "Calcite"}, ...]
+        """
+        path = dat_file_path or self.phreeqc_dat
+
+        if not os.path.isfile(path):
+            logger.warning(f"DAT file not found for PHASES parsing: {path}")
+            return []
+
+        minerals: List[Dict[str, str]] = []
+
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+
+            # Find the PHASES block — it starts at "PHASES" keyword and ends at the
+            # next top-level keyword (all-caps word at column 0, e.g. SOLUTION_MASTER_SPECIES)
+            phases_match = re.search(
+                r"^PHASES\s*\n(.*?)(?=^\s*[A-Z_]{3,}\s*$|\Z)",
+                content,
+                re.MULTILINE | re.DOTALL,
+            )
+
+            if not phases_match:
+                logger.warning(f"No PHASES section found in: {path}")
+                return []
+
+            phases_block = phases_match.group(1)
+
+            # Each mineral entry starts at column 0 (no leading whitespace),
+            # followed by indented reaction line(s) and log_k line(s).
+            # Pattern: line at col-0 that is NOT a comment (#) and NOT all-caps keyword
+            mineral_name_re = re.compile(r"^([A-Za-z][A-Za-z0-9_\-()]*)\s*$", re.MULTILINE)
+            # Reaction line: first indented line after the mineral name (contains "=")
+            reaction_re = re.compile(r"^\s+(\S[^=\n]+)=(.+)$", re.MULTILINE)
+
+            # Split block into per-mineral chunks by finding name lines
+            entries = mineral_name_re.split(phases_block)
+            # entries = [pre_text, name1, block1, name2, block2, ...]
+            # entries[0] is text before first mineral name (usually empty)
+
+            i = 1  # skip pre_text
+            while i < len(entries) - 1:
+                name  = entries[i].strip()
+                block = entries[i + 1]
+                i += 2
+
+                if not name:
+                    continue
+
+                # Extract chemical formula from the reaction line (left side of "=")
+                formula = ""
+                rxn_match = reaction_re.search(block)
+                if rxn_match:
+                    lhs = rxn_match.group(1).strip()
+                    # Formula is the first token of the left-hand side
+                    # e.g. "CaCO3" from "CaCO3 = Ca+2 + CO3-2"
+                    # e.g. "CaSO4:2H2O" from "CaSO4:2H2O = ..."
+                    formula = lhs.split()[0] if lhs else ""
+
+                minerals.append({
+                    "name":             name,
+                    "chemical_formula": formula,
+                    "phase":            name,
+                })
+
+            logger.info(f"✅ Parsed {len(minerals)} minerals from PHASES section: {path}")
+            return minerals
+
+        except Exception as e:
+            logger.error(f"Failed to parse PHASES from {path}: {e}")
+            return []
+
+    # ========================================
     # HIGH-LEVEL: FULL ANALYSIS (single point)
     # ========================================
     async def analyze(
@@ -866,6 +958,246 @@ class PHREEQCService:
 
         return result
 
+    # ========================================
+    # STEP 1-3: CO2 EQUILIBRATION (natural pH)
+    # ========================================
+    async def run_step1_co2_equilibration(
+        self,
+        water_params: Dict[str, Any],
+        co2_log_partial_pressure: float,
+        database: str,
+    ) -> Dict[str, Any]:
+        """
+        Client Step 1-3: Run PHREEQC at cold basin temperature with CO2 equilibration.
+
+        Builds:
+          SOLUTION 1 (cold temp, input pH)
+          EQUILIBRIUM_PHASES 1
+            CO2(g) <co2_log_partial_pressure> 100.0
+          USE solution 1
+          USE equilibrium_phases 1
+          END
+
+        Returns dict with:
+          pH          → natural pH after CO2 degassing
+          ionic_strength, charge_balance_error_pct, description_of_solution
+        """
+        pqi = self._build_step1_pqi(water_params, co2_log_partial_pressure)
+        raw_output = await self._execute_phreeqc_raw(pqi, database)
+
+        # Parse the batch-reaction section (after CO2 equilibration)
+        result = self._parse_step1_output(raw_output)
+        logger.debug(
+            f"Step 1-3 CO2 eq: input_pH={_get_param_value(water_params, 'pH'):.3f} "
+            f"→ natural_pH={result.get('pH', 'N/A')}"
+        )
+        return result
+
+    def _build_step1_pqi(
+        self,
+        water_params: Dict[str, Any],
+        co2_log_partial_pressure: float,
+    ) -> str:
+        """
+        Build PHREEQC input for Step 1-3 (CO2 equilibration at cold supply temp).
+        Unit-aware: handles 'mg/L as CaCO3', 'mg/L as SO4', 'mg/L as SiO2' etc.
+        """
+        lines = ["SOLUTION 1  Makeup water at cold basin temperature"]
+
+        ph     = _get_param_value(water_params, "pH") or 7.0
+        temp_v = water_params.get("Temperature")
+        temp   = (temp_v["value"] if isinstance(temp_v, dict) else float(temp_v or 25.0))
+
+        lines.append(f"    temp     {temp:.1f}")
+        lines.append(f"    pH       {ph:.3f}")
+        lines.append("    pe       4.0")
+        lines.append("    density  1.000")
+        lines.append("    units    mg/L")
+
+        # Ion map: param_key → (phreeqc_name, default_as_unit)
+        ion_map = {
+            "Ca":   ("Ca",          "CaCO3"),
+            "Mg":   ("Mg",          "CaCO3"),
+            "Na":   ("Na",          None),
+            "K":    ("K",           None),
+            "Cl":   ("Cl",          None),
+            "SO4":  ("S(6)",        "SO4"),
+            "HCO3": ("Alkalinity",  "CaCO3"),
+            "SiO2": ("Si",          "SiO2"),
+            "Fe":   ("Fe",          "Fe2O3"),
+            "PO4":  ("P",           "PO4"),
+            "Ba":   ("Ba",          None),
+            "Sr":   ("Sr",          None),
+            "Mn":   ("Mn",          None),
+            "F":    ("F",           None),
+        }
+
+        for param_key, (phreeqc_name, default_as) in ion_map.items():
+            entry = water_params.get(param_key)
+            if entry is None:
+                continue
+            if isinstance(entry, dict):
+                value   = entry.get("value", 0)
+                unit    = entry.get("unit", "") or ""
+                as_unit = _extract_as_unit(unit) or default_as
+            else:
+                value   = float(entry)
+                as_unit = default_as
+
+            if value is None or float(value) <= 0:
+                continue
+
+            if as_unit:
+                lines.append(f"    {phreeqc_name:<12} {float(value):.4f}  as {as_unit}")
+            else:
+                lines.append(f"    {phreeqc_name:<12} {float(value):.4f}")
+
+        lines.append("END")
+        lines.append("")
+        lines.append("EQUILIBRIUM_PHASES 1")
+        lines.append(f"    CO2(g)   {co2_log_partial_pressure:.2f}  100.0")
+        lines.append("")
+        lines.append("USE solution 1")
+        lines.append("USE equilibrium_phases 1")
+        lines.append("END")
+
+        return "\n".join(lines)
+
+    def _parse_step1_output(self, output_text: str) -> Dict[str, Any]:
+        """
+        Parse Step 1-3 output — extract the batch-reaction result (after CO2 eq).
+        The batch-reaction section starts with 'Beginning of batch-reaction calculations'.
+        """
+        # Split at batch-reaction section
+        marker = "Beginning of batch-reaction calculations"
+        idx = output_text.find(marker)
+
+        if idx == -1:
+            # Fallback: parse entire output
+            logger.warning("Step 1-3: batch-reaction section not found, parsing full output")
+            parsed = self._parse_phreeqc_output(output_text)
+        else:
+            batch_section = output_text[idx:]
+            parsed = self._parse_phreeqc_output(batch_section)
+
+        # Extract pH from description of solution
+        desc = parsed.get("description_of_solution", {})
+        natural_ph = desc.get("pH") or parsed.get("pH_from_output")
+
+        # Also try regex on the batch section
+        if natural_ph is None:
+            ph_match = re.search(r"pH\s*=\s*([\d.]+)", output_text[idx:] if idx != -1 else output_text)
+            if ph_match:
+                natural_ph = float(ph_match.group(1))
+
+        return {
+            "pH":                      natural_ph or 7.0,
+            "ionic_strength":          parsed.get("ionic_strength", 0.0),
+            "charge_balance_error_pct": parsed.get("charge_balance_error_pct", 0.0),
+            "description_of_solution": desc,
+            "saturation_indices":      parsed.get("saturation_indices", []),
+        }
+
+    # ========================================
+    # STEP 5-6: HOT TEMP SI CALCULATION
+    # ========================================
+    async def run_step5_hot_temp(
+        self,
+        water_params: Dict[str, Any],
+        natural_ph: float,
+        hot_temp_c: float,
+        balance_anion: str,
+        database: str,
+    ) -> Dict[str, Any]:
+        """
+        Client Step 5-6: Run PHREEQC at hot evaluation temperature.
+
+        Builds:
+          SOLUTION 1 (hot temp, natural pH from Step 3, Cl/SO4 charge balance)
+          END
+
+        Returns full parsed result with saturation indices.
+        """
+        pqi = self._build_step5_pqi(water_params, natural_ph, hot_temp_c, balance_anion)
+        result = await self._execute_phreeqc(pqi, database)
+        return result
+
+    def _build_step5_pqi(
+        self,
+        water_params: Dict[str, Any],
+        natural_ph: float,
+        hot_temp_c: float,
+        balance_anion: str,
+    ) -> str:
+        """
+        Build PHREEQC input for Step 5-6 (hot eval temp, natural pH, charge balance).
+        Unit-aware: handles 'mg/L as CaCO3', 'mg/L as SO4' etc.
+        Client: Add 'charge' to Cl (or SO4 if balance_anion=SO4).
+        """
+        lines = ["SOLUTION 1  Evaluation at hot basin temperature"]
+        lines.append(f"    temp     {hot_temp_c:.1f}")
+        lines.append(f"    pH       {natural_ph:.3f}")
+        lines.append("    pe       4.0")
+        lines.append("    density  1.000")
+        lines.append("    units    mg/L")
+
+        charge_ion = (balance_anion or "Cl").upper()
+
+        ion_map = {
+            "Ca":   ("Ca",          "CaCO3",  False),
+            "Mg":   ("Mg",          "CaCO3",  False),
+            "Na":   ("Na",          None,     False),
+            "K":    ("K",           None,     False),
+            "Cl":   ("Cl",          None,     charge_ion == "CL"),
+            "SO4":  ("S(6)",        "SO4",    charge_ion == "SO4"),
+            "HCO3": ("Alkalinity",  "CaCO3",  False),
+            "SiO2": ("Si",          "SiO2",   False),
+            "Fe":   ("Fe",          "Fe2O3",  False),
+            "PO4":  ("P",           "PO4",    False),
+            "Ba":   ("Ba",          None,     False),
+            "Sr":   ("Sr",          None,     False),
+            "Mn":   ("Mn",          None,     False),
+            "F":    ("F",           None,     False),
+        }
+
+        for param_key, (phreeqc_name, default_as, is_charge) in ion_map.items():
+            entry = water_params.get(param_key)
+            if entry is None:
+                continue
+            if isinstance(entry, dict):
+                value   = entry.get("value", 0)
+                unit    = entry.get("unit", "") or ""
+                as_unit = _extract_as_unit(unit) or default_as
+            else:
+                value   = float(entry)
+                as_unit = default_as
+
+            if value is None or float(value) <= 0:
+                continue
+
+            if is_charge:
+                if as_unit:
+                    lines.append(f"    {phreeqc_name:<12} {float(value):.4f}  as {as_unit}  charge")
+                else:
+                    lines.append(f"    {phreeqc_name:<12} {float(value):.4f}  charge")
+            elif as_unit:
+                lines.append(f"    {phreeqc_name:<12} {float(value):.4f}  as {as_unit}")
+            else:
+                lines.append(f"    {phreeqc_name:<12} {float(value):.4f}")
+
+        lines.append("")
+        lines.append("SELECTED_OUTPUT")
+        lines.append("    -saturation_indices")
+        lines.append("    -molalities")
+        lines.append("    -charge_balance")
+        lines.append("    -ionic_strength")
+        lines.append("")
+        lines.append("END")
+
+        return "\n".join(lines)
+
+
+
 
 # ========================================
 # MODULE-LEVEL HELPERS
@@ -881,6 +1213,21 @@ def _get_param_value(params: Dict[str, Any], key: str) -> Optional[float]:
     if isinstance(val, dict):
         return float(val.get("value", 0))
     return None
+
+
+def _extract_as_unit(unit_str: str) -> Optional[str]:
+    """
+    Extract 'as XXX' unit from unit string.
+    Examples:
+      'mg/L as CaCO3' → 'CaCO3'
+      'mg/L as SO4'   → 'SO4'
+      'mg/L'          → None
+    """
+    if not unit_str:
+        return None
+    import re as _re
+    m = _re.search(r'\bas\s+(\S+)', unit_str, _re.IGNORECASE)
+    return m.group(1) if m else None
 
 
 def _set_param_value(params: Dict[str, Any], key: str, value: float) -> Dict[str, Any]:
