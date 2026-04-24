@@ -5359,11 +5359,17 @@ class SaturationService:
                 for k, v in raw_water.items():
                     params[k] = v
 
-                params["pH"]          = {"value": r["_grid_pH"],   "unit": ""}
-                params["Temperature"] = {"value": r["_grid_temp"],  "unit": "°C"}
+                # Use natural pH from CO2 equilibration (correct pH)
+                grid_ph   = float(r.get("_grid_pH") or r.get("_natural_ph_at_cold") or 7.0)
+                grid_temp = float(r.get("_grid_temp") or 25.0)
+
+                params["pH"]          = {"value": grid_ph,   "unit": ""}
+                params["Temperature"] = {"value": grid_temp,  "unit": "°C"}
+
+                ionic_strength = float(r.get("ionic_strength") or 0.0)
 
                 phreeqc_output = {
-                    "ionic_strength":     r.get("ionic_strength", 0.0),
+                    "ionic_strength":     ionic_strength,
                     "saturation_indices": [
                         {"mineral_name": k, "si_value": v.get("SI", 0.0)}
                         for k, v in r.get("saturation_indices", {}).items()

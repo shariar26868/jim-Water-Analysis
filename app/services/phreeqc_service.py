@@ -664,8 +664,8 @@ class PHREEQCService:
 
         # --- Ionic Strength ---
         for line in lines:
-            if "Ionic strength" in line:
-                match = re.search(r"([-+]?\d+\.?\d*(?:[eE][-+]?\d+)?)", line.split("=")[-1])
+            if "Ionic strength" in line and "=" in line:
+                match = re.search(r"([\d.eE+\-]+)\s*$", line.split("=")[-1].strip())
                 if match:
                     parsed["ionic_strength"] = float(match.group(1))
 
@@ -709,25 +709,45 @@ class PHREEQCService:
 
         # --- Description of Solution ---
         desc: Dict[str, Any] = {}
+        in_desc_block = False
         for line in lines:
-            if "pH" in line and "=" in line and "pe" not in line.lower():
-                m = re.search(r"pH\s*=\s*([\d.]+)", line)
+            if "Description of solution" in line:
+                in_desc_block = True
+                continue
+            if in_desc_block:
+                # Stop at next section header (dashes line)
+                if line.strip().startswith("---") or "Distribution of species" in line:
+                    in_desc_block = False
+                    continue
+                # pH  =   7.976
+                m = re.search(r"^\s*pH\s*=\s*([\d.]+)", line)
                 if m:
                     desc["pH"] = float(m.group(1))
-            if "Temperature" in line and "=" in line:
-                m = re.search(r"Temperature\s*=\s*([\d.]+)", line)
+                # Temperature
+                m = re.search(r"Temperature\s*\(.*?\)\s*=\s*([\d.]+)", line)
                 if m:
                     desc["temperature_C"] = float(m.group(1))
-            if "Density" in line and "=" in line:
-                m = re.search(r"Density\s*=\s*([\d.eE+\-]+)", line)
+                # Density
+                m = re.search(r"Density\s*\(g/cm.*?\)\s*=\s*([\d.]+)", line)
                 if m:
                     desc["density"] = float(m.group(1))
-            if "Activity of water" in line:
+                # Activity of water
                 m = re.search(r"Activity of water\s*=\s*([\d.eE+\-]+)", line)
                 if m:
                     desc["activity_of_water"] = float(m.group(1))
+                # Specific Conductance
+                m = re.search(r"Specific Conductance.*?=\s*([\d.]+)", line)
+                if m:
+                    desc["specific_conductance"] = float(m.group(1))
+                # Ionic strength
+                m = re.search(r"Ionic strength\s*\(mol/kgw\)\s*=\s*([\d.eE+\-]+)", line)
+                if m:
+                    desc["ionic_strength_desc"] = float(m.group(1))
         if desc:
             parsed["description_of_solution"] = desc
+            # Also set ionic_strength from description if not already set
+            if not parsed.get("ionic_strength") and desc.get("ionic_strength_desc"):
+                parsed["ionic_strength"] = desc["ionic_strength_desc"]
 
         # --- Distribution of Species ---
         # Format:
@@ -1067,35 +1087,77 @@ class PHREEQCService:
         """
         Parse Step 1-3 output — extract the batch-reaction result (after CO2 eq).
         The batch-reaction section starts with 'Beginning of batch-reaction calculations'.
+        We need the SECOND solution block (after CO2 equilibration).
         """
-        # Split at batch-reaction section
+        # Find batch-reaction section
         marker = "Beginning of batch-reaction calculations"
         idx = output_text.find(marker)
 
         if idx == -1:
-            # Fallback: parse entire output
             logger.warning("Step 1-3: batch-reaction section not found, parsing full output")
-            parsed = self._parse_phreeqc_output(output_text)
+            section = output_text
         else:
-            batch_section = output_text[idx:]
-            parsed = self._parse_phreeqc_output(batch_section)
+            section = output_text[idx:]
 
-        # Extract pH from description of solution
+        parsed = self._parse_phreeqc_output(section)
+
+        # Extract pH — try multiple patterns from PHREEQC output
+        # PHREEQC format: "                                       pH  =   7.976    "
+        natural_ph = None
+
+        # Pattern 1: from description_of_solution
         desc = parsed.get("description_of_solution", {})
-        natural_ph = desc.get("pH") or parsed.get("pH_from_output")
+        if desc.get("pH"):
+            natural_ph = float(desc["pH"])
 
-        # Also try regex on the batch section
-        if natural_ph is None:
-            ph_match = re.search(r"pH\s*=\s*([\d.]+)", output_text[idx:] if idx != -1 else output_text)
+        # Pattern 2: regex on the batch section — PHREEQC format has spaces
+        if natural_ph is None or natural_ph <= 0:
+            # Match "pH  =   7.976" with optional spaces
+            ph_match = re.search(r"pH\s*=\s*([\d.]+)", section)
             if ph_match:
                 natural_ph = float(ph_match.group(1))
 
+        # Pattern 3: look in "Description of solution" block specifically
+        if natural_ph is None or natural_ph <= 0:
+            desc_block_match = re.search(
+                r"Description of solution.*?pH\s*=\s*([\d.]+)",
+                section, re.DOTALL | re.IGNORECASE
+            )
+            if desc_block_match:
+                natural_ph = float(desc_block_match.group(1))
+
+        # Extract ionic strength
+        ionic_strength = parsed.get("ionic_strength", 0.0)
+        if not ionic_strength:
+            is_match = re.search(r"Ionic strength\s*\(mol/kgw\)\s*=\s*([\d.eE+\-]+)", section)
+            if is_match:
+                ionic_strength = float(is_match.group(1))
+
+        # Extract specific conductance
+        sc_match = re.search(r"Specific Conductance.*?=\s*([\d.]+)", section)
+        specific_conductance = float(sc_match.group(1)) if sc_match else None
+
+        # Extract density
+        density_match = re.search(r"Density\s*\(g/cm.*?\)\s*=\s*([\d.]+)", section)
+        density = float(density_match.group(1)) if density_match else None
+
+        if natural_ph:
+            desc["pH"] = natural_ph
+        if ionic_strength:
+            desc["ionic_strength"] = ionic_strength
+        if specific_conductance:
+            desc["specific_conductance"] = specific_conductance
+        if density:
+            desc["density"] = density
+
+        logger.debug(f"Step 1-3 parsed: pH={natural_ph}, IS={ionic_strength}")
+
         return {
-            "pH":                      natural_ph or 7.0,
-            "ionic_strength":          parsed.get("ionic_strength", 0.0),
+            "pH":                       natural_ph or 7.0,
+            "ionic_strength":           ionic_strength,
             "charge_balance_error_pct": parsed.get("charge_balance_error_pct", 0.0),
-            "description_of_solution": desc,
-            "saturation_indices":      parsed.get("saturation_indices", []),
+            "description_of_solution":  desc,
+            "saturation_indices":       parsed.get("saturation_indices", []),
         }
 
     # ========================================
