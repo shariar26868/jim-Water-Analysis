@@ -1035,14 +1035,16 @@ class PHREEQCService:
         lines.append("    units    mg/L")
 
         # Ion map: param_key → (phreeqc_name, default_as_unit)
+        # NOTE: Ca, Mg, HCO3 values are already converted to elemental mg/L
+        # by _convert_caco3_units() before reaching here. Do NOT use 'as CaCO3'.
         ion_map = {
-            "Ca":   ("Ca",          "CaCO3"),
-            "Mg":   ("Mg",          "CaCO3"),
+            "Ca":   ("Ca",          None),
+            "Mg":   ("Mg",          None),
             "Na":   ("Na",          None),
             "K":    ("K",           None),
             "Cl":   ("Cl",          None),
             "SO4":  ("S(6)",        "SO4"),
-            "HCO3": ("Alkalinity",  "CaCO3"),
+            "HCO3": ("Alkalinity",  "HCO3"),
             "SiO2": ("Si",          "SiO2"),
             "Fe":   ("Fe",          "Fe2O3"),
             "PO4":  ("P",           "PO4"),
@@ -1195,6 +1197,8 @@ class PHREEQCService:
         Build PHREEQC input for Step 5-6 (hot eval temp, natural pH, charge balance).
         Unit-aware: handles 'mg/L as CaCO3', 'mg/L as SO4' etc.
         Client: Add 'charge' to Cl (or SO4 if balance_anion=SO4).
+        NOTE: Alkalinity is NOT given 'charge' — it is fixed.
+              Only Cl or SO4 gets 'charge' keyword.
         """
         lines = ["SOLUTION 1  Evaluation at hot basin temperature"]
         lines.append(f"    temp     {hot_temp_c:.1f}")
@@ -1203,16 +1207,24 @@ class PHREEQCService:
         lines.append("    density  1.000")
         lines.append("    units    mg/L")
 
-        charge_ion = (balance_anion or "Cl").upper()
+        charge_ion = (balance_anion or "Cl").upper().replace("-", "").replace("(6)", "")
+        # Normalize: SO4 or CL
+        if "SO4" in charge_ion or "S" == charge_ion:
+            charge_ion = "SO4"
+        else:
+            charge_ion = "CL"
 
         ion_map = {
-            "Ca":   ("Ca",          "CaCO3",  False),
-            "Mg":   ("Mg",          "CaCO3",  False),
+            # Ca, Mg: _convert_caco3_units() already converted these to elemental mg/L.
+            # Do NOT use 'as CaCO3' — the values are already in mg/L as Ca / mg/L as Mg.
+            "Ca":   ("Ca",          None,     False),
+            "Mg":   ("Mg",          None,     False),
             "Na":   ("Na",          None,     False),
             "K":    ("K",           None,     False),
             "Cl":   ("Cl",          None,     charge_ion == "CL"),
             "SO4":  ("S(6)",        "SO4",    charge_ion == "SO4"),
-            "HCO3": ("Alkalinity",  "CaCO3",  False),
+            # Alkalinity: value is already in mg/L as HCO3 after _convert_caco3_units().
+            "HCO3": ("Alkalinity",  "HCO3",   False),
             "SiO2": ("Si",          "SiO2",   False),
             "Fe":   ("Fe",          "Fe2O3",  False),
             "PO4":  ("P",           "PO4",    False),
@@ -1256,7 +1268,9 @@ class PHREEQCService:
         lines.append("")
         lines.append("END")
 
-        return "\n".join(lines)
+        pqi_content = "\n".join(lines)
+        logger.info(f"[DEBUG] Step5 PQI:\n{pqi_content}")
+        return pqi_content
 
 
 

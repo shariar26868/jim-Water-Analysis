@@ -4082,33 +4082,69 @@ def _resolve_balance_ion_from_chemical(
     explicit_balance_cation: Optional[str],
 ) -> Tuple[str, str]:
     """
-    Auto-resolve balance_anion / balance_cation from adjustment_chemical
-    when the caller does not explicitly set them.
+    Auto-resolve balance_anion / balance_cation from adjustment_chemical.
+
+    PHREEQC charge balance rules (strict):
+      Valid anions:  Cl, SO4  (HCO3/Alkalinity NEVER valid — circular dependency)
+      Valid cations: Na, K    (Ca, Mg NEVER valid — they are part of carbonate system)
 
     Returns (balance_cation, balance_anion).
     """
-    balance_cation = explicit_balance_cation or "Na"
-    balance_anion  = explicit_balance_anion  or "Cl"
+    # ── Step 1: Start with explicit values (or defaults) ─────────────────────
+    raw_cation = (explicit_balance_cation or "Na").strip()
+    raw_anion  = (explicit_balance_anion  or "Cl").strip()
 
-    if not chemical:
-        return balance_cation, balance_anion
-
-    chem = chemical.upper().replace("-", "").replace("_", "").replace(" ", "")
-
-    if chem == "HCL" or chem == "HYDROCHLORIC":
-        balance_anion = "Cl"
-    elif chem in ("H2SO4", "SULFURIC", "SULPHURIC"):
+    # ── Step 2: Validate & normalize anion ───────────────────────────────────
+    # HCO3, Alkalinity, CO3, etc. are NEVER valid charge balance anions in PHREEQC.
+    # They create circular dependency in the carbonate system → convergence failure.
+    norm_anion = raw_anion.upper().replace("-", "").replace("(", "").replace(")", "").replace(" ", "")
+    if "SO4" in norm_anion or norm_anion in ("S6", "S(6)", "SULFATE", "SULPHATE"):
         balance_anion = "SO4"
-    elif chem in ("NAOH", "SODIUMHYDROXIDE", "CAUSTIC"):
+    elif norm_anion in ("CL", "CHLORIDE", "HCL"):
+        balance_anion = "Cl"
+    else:
+        # HCO3, ALKALINITY, CO3, HCO3-, etc. → default to Cl
+        if norm_anion not in ("CL", "SO4"):
+            logger.warning(
+                f"balance_anion='{raw_anion}' is not a valid PHREEQC charge balance anion "
+                f"(HCO3/Alkalinity creates circular dependency). Defaulting to 'Cl'."
+            )
+        balance_anion = "Cl"
+
+    # ── Step 3: Validate & normalize cation ──────────────────────────────────
+    # Ca, Mg are NOT valid PHREEQC charge balance cations.
+    norm_cation = raw_cation.upper().replace("+", "").replace("2", "").replace(" ", "")
+    if norm_cation == "K":
+        balance_cation = "K"
+    elif norm_cation in ("NA", "SODIUM"):
         balance_cation = "Na"
-        balance_anion  = "Cl"   # keep Cl as anion balance
-    elif chem in ("CA(OH)2", "LIME", "CALCIUMHYDROXIDE"):
-        balance_cation = "Ca"
-        balance_anion  = "Cl"
+    else:
+        # Ca, Mg, Fe, etc. → default to Na
+        if norm_cation not in ("NA", "K"):
+            logger.warning(
+                f"balance_cation='{raw_cation}' is not a valid PHREEQC charge balance cation "
+                f"(only Na or K allowed). Defaulting to 'Na'."
+            )
+        balance_cation = "Na"
+
+    # ── Step 4: Override from adjustment_chemical if provided ────────────────
+    if chemical:
+        chem = chemical.upper().replace("-", "").replace("_", "").replace(" ", "")
+        if chem in ("HCL", "HYDROCHLORIC", "HYDROCHLORICACID"):
+            balance_anion = "Cl"
+        elif chem in ("H2SO4", "SULFURIC", "SULPHURIC", "SULFURICACID"):
+            balance_anion = "SO4"
+        elif chem in ("NAOH", "SODIUMHYDROXIDE", "CAUSTIC", "CAUSTICODA"):
+            balance_cation = "Na"
+            # keep balance_anion as already resolved
+        elif chem in ("CA(OH)2", "CAOH2", "LIME", "CALCIUMHYDROXIDE", "CALCIUMHYDROXIDE"):
+            # Ca(OH)2 → Na is the valid cation (Ca is NOT valid for charge balance)
+            balance_cation = "Na"
 
     logger.info(
-        f"Charge balance resolved from chemical='{chemical}': "
-        f"cation={balance_cation}, anion={balance_anion}"
+        f"Charge balance resolved: chemical='{chemical}', "
+        f"explicit_anion='{raw_anion}'→'{balance_anion}', "
+        f"explicit_cation='{raw_cation}'→'{balance_cation}'"
     )
     return balance_cation, balance_anion
 
@@ -5577,6 +5613,28 @@ class SaturationService:
         summary = self._summary(results)
 
         # ── 16. Save to DB ────────────────────────────────────────────────────
+        # Build balance override warnings for frontend display
+        raw_cation_input = req.get("balance_cation", "Na") or "Na"
+        raw_anion_input  = req.get("balance_anion",  "Cl") or "Cl"
+        balance_warnings: List[str] = []
+
+        # Normalize input for comparison (strip charge symbols like 2+, -, etc.)
+        def _strip_charge(s: str) -> str:
+            return s.upper().replace("2+","").replace("+","").replace("2-","").replace("-","").strip()
+
+        if _strip_charge(raw_cation_input) not in ("NA", "K"):
+            balance_warnings.append(
+                f"balance_cation '{raw_cation_input}' is not valid for PHREEQC "
+                f"(Ca²⁺ and Mg²⁺ cannot be used as charge balance ions). "
+                f"Using 'Na' instead."
+            )
+        if _strip_charge(raw_anion_input) not in ("CL", "SO4", "S6"):
+            balance_warnings.append(
+                f"balance_anion '{raw_anion_input}' is not valid for PHREEQC "
+                f"(HCO₃⁻ creates circular dependency in carbonate system). "
+                f"Using 'Cl' instead."
+            )
+
         doc = {
             "run_id":                  run_id,
             "salt_id":                 effective_salt,
@@ -5592,8 +5650,12 @@ class SaturationService:
             "fixed_ph":                fixed_ph,
             "co2_factor":              co2_factor,
             "adjustment_chemical":     req.get("adjustment_chemical"),
-            "balance_cation":          balance_cation,
-            "balance_anion":           balance_anion,
+            # What user requested vs what was actually used
+            "balance_cation_requested": raw_cation_input,
+            "balance_anion_requested":  raw_anion_input,
+            "balance_cation":          balance_cation,   # actually used in PHREEQC
+            "balance_anion":           balance_anion,    # actually used in PHREEQC
+            "balance_warnings":        balance_warnings, # non-empty if override happened
             "database_used":           db_used,
             "total_grid_points":       len(results),
             "grid_results":            results,
@@ -5628,8 +5690,15 @@ class SaturationService:
         if not results:
             raise ValueError(f"No grid results saved for run_id: {run_id}")
 
-        sample_si    = results[0].get("saturation_indices", {})
-        available    = list(sample_si.keys())
+        sample_si = results[0].get("saturation_indices", {})
+        available = list(sample_si.keys())
+
+        if not available:
+            raise ValueError(
+                f"No saturation indices in saved results for run_id: {run_id}. "
+                f"The original PHREEQC run may have failed — please re-run the analysis."
+            )
+
         salt_id_lower = salt_id.lower()
 
         resolved_salt = None

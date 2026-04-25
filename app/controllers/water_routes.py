@@ -1894,29 +1894,136 @@ from app.models.schemas import (
 )
 
 
+def _normalize_saturation_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize two payload formats into a single flat dict for SaturationService.run_analysis().
+
+    Format A (AI-server format):
+    {
+      "assetId": "...",
+      "name": "...",
+      "waterReportId": "...",
+      "inputConfig": {
+        "salt_id": "...",
+        "salts_of_interest": [...],
+        "dosage_ppm": 11,
+        "coc_min": 1, "coc_max": 10, "coc_interval": 2,
+        "temp_min": 1, "temp_max": 10, "temp_interval": 5,
+        "temp_unit": "C",
+        "ph_mode": "natural",
+        "adjustment_chemical": "H2SO4",
+        "balance_cation": "Ca",
+        "balance_anion": "SO4"
+      },
+      "treatment": { "productId": "...", "dosage": 5 }
+    }
+
+    Format B (direct format — already flat):
+    {
+      "base_water_parameters": {...},
+      "salt_id": "...",
+      ...
+    }
+    """
+    # If already in Format B (has base_water_parameters at top level), return as-is
+    if "base_water_parameters" in raw:
+        return raw
+
+    # Format A: flatten inputConfig into top-level
+    result: Dict[str, Any] = {}
+
+    # Merge inputConfig fields to top level
+    input_config = raw.get("inputConfig") or {}
+    result.update(input_config)
+
+    # base_water_parameters — may be inside inputConfig or at top level
+    if "base_water_parameters" not in result:
+        bwp = raw.get("base_water_parameters") or input_config.get("base_water_parameters") or {}
+        result["base_water_parameters"] = bwp
+
+    # Asset metadata
+    asset_info = raw.get("asset_info") or raw.get("assetInfo") or {}
+    if not asset_info and raw.get("assetId"):
+        asset_info = {"assetId": raw["assetId"]}
+    result["asset_info"] = asset_info
+
+    # Treatment / product blend
+    treatment = raw.get("treatment") or {}
+    if treatment and "product_blend" not in result:
+        result["product_blend"] = {
+            "productId": treatment.get("productId"),
+            "dosage":    treatment.get("dosage"),
+        }
+        # dosage_ppm from treatment if not in inputConfig
+        if "dosage_ppm" not in result and treatment.get("dosage"):
+            result["dosage_ppm"] = float(treatment["dosage"])
+
+    # raw_material_chemistry — may be at top level
+    if "raw_material_chemistry" not in result:
+        result["raw_material_chemistry"] = raw.get("raw_material_chemistry") or raw.get("rawMaterialChemistry")
+
+    # Metadata fields
+    result.setdefault("asset_id",      raw.get("assetId"))
+    result.setdefault("report_name",   raw.get("name") or raw.get("waterReportId"))
+    result.setdefault("customer_id",   raw.get("customerId"))
+    result.setdefault("customer_name", raw.get("customerName"))
+
+    return result
+
+
 @router.post(
     "/saturation/run-analysis",
     summary="Run Saturation Analysis & Generate 3D Graph",
     tags=["Saturation Analysis"],
 )
-async def run_saturation_analysis(request: SaturationRunRequest):
+async def run_saturation_analysis(raw_body: Dict[str, Any] = Body(...)):
     """
-    Full saturation analysis pipeline:
-    1. Dynamic water param mapping (OCR keys → PHREEQC ions)
-    2. pH adjustment chemical corrections
-    3. CoC × Temperature grid build
-    4. Ionic strength check → phreeqc.dat or pitzer.dat
-    5. Ion balance (charge balance ±5%)
-    6. PHREEQC batch run — ALL salts saved with full detail
-    7. Color coding (green/yellow/red) from raw_material_chemistry band cushions
-    8. 3D bar chart → S3 upload → URL returned
-    9. Full results saved to MongoDB
+    Full saturation analysis pipeline.
+    Accepts two payload formats:
+
+    Format A (AI-server format):
+      { "assetId": "...", "waterReportId": "...", "inputConfig": { "salt_id": ..., ... },
+        "treatment": { "productId": ..., "dosage": ... } }
+
+    Format B (direct format):
+      { "base_water_parameters": {...}, "salt_id": ..., ... }
 
     salt_id / salts_of_interest = null → analyze ALL salts
     """
     try:
         service = SaturationService()
-        result  = await service.run_analysis(request.model_dump())
+
+        # ── Detect and normalize payload format ──────────────────────────────
+        req = _normalize_saturation_payload(raw_body)
+
+        # ── Fetch base_water_parameters from DB if not provided ───────────────
+        if not req.get("base_water_parameters"):
+            water_report_id = raw_body.get("waterReportId") or raw_body.get("water_report_id")
+            if water_report_id:
+                # Try to fetch from water_reports collection
+                report = await db.db["water_reports"].find_one(
+                    {"reportId": water_report_id},
+                    {"_id": 0, "parameters": 1, "waterParameters": 1, "base_water_parameters": 1}
+                )
+                if report:
+                    bwp = (
+                        report.get("base_water_parameters")
+                        or report.get("waterParameters")
+                        or report.get("parameters")
+                        or {}
+                    )
+                    req["base_water_parameters"] = bwp
+                    logger.info(f"Fetched base_water_parameters from waterReportId={water_report_id}: {list(bwp.keys())}")
+                else:
+                    logger.warning(f"waterReportId={water_report_id} not found in DB. base_water_parameters will be empty.")
+
+        if not req.get("base_water_parameters"):
+            raise ValueError(
+                "base_water_parameters is required. "
+                "Provide it directly in the payload or via a valid waterReportId."
+            )
+
+        result = await service.run_analysis(req)
         return {"success": True, "message": "Successfully performed Saturation Analysis!", "data": result}
 
     except ValueError as e:
