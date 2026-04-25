@@ -1,2 +1,2 @@
          sim	       state	        soln	      dist_x	        time	        step	          pH	          pe	          mu	      charge	
-           1	      i_soln	           1	         -99	         -99	         -99	       8.469	           4	   0.0309949	-1.64462e-10	
+           1	      i_soln	           1	         -99	         -99	         -99	       8.539	           4	   0.0168153	 5.26781e-14	
