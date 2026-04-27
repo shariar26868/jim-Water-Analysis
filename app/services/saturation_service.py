@@ -4160,6 +4160,109 @@ def _get_inhibited_salts(raw_material_chemistry: Optional[Dict]) -> List[str]:
     return [f.get("salToInhibit", "") for f in formulas if f.get("salToInhibit")]
 
 
+# Mineral → required ions mapping (subset of common minerals)
+# If a mineral's required ion is missing from water, PHREEQC won't calculate its SI
+_MINERAL_REQUIRED_IONS: Dict[str, List[str]] = {
+    "Fluorite":       ["F"],
+    "Fluorapatite":   ["F", "PO4"],
+    "Strengite":      ["Fe", "PO4"],
+    "Vivianite":      ["Fe", "PO4"],
+    "Siderite":       ["Fe"],
+    "Goethite":       ["Fe"],
+    "Ferrihydrite":   ["Fe"],
+    "Hematite":       ["Fe"],
+    "Magnetite":      ["Fe"],
+    "Pyrite":         ["Fe"],
+    "Rhodochrosite":  ["Mn"],
+    "Pyrolusite":     ["Mn"],
+    "Manganite":      ["Mn"],
+    "Barite":         ["Ba"],
+    "Witherite":      ["Ba"],
+    "Celestite":      ["Sr"],
+    "Strontianite":   ["Sr"],
+    "Hydroxyapatite": ["PO4"],
+    "Strengite":      ["Fe", "PO4"],
+    "Variscite":      ["Al", "PO4"],
+    "Gibbsite":       ["Al"],
+    "Boehmite":       ["Al"],
+    "Diaspore":       ["Al"],
+    "Kaolinite":      ["Al", "SiO2"],
+    "Albite":         ["Na", "Al", "SiO2"],
+    "Anorthite":      ["Ca", "Al", "SiO2"],
+    "K-feldspar":     ["K", "Al", "SiO2"],
+    "Illite":         ["K", "Al", "SiO2"],
+    "Montmorillonite":["Al", "SiO2"],
+    "Chrysotile":     ["Mg", "SiO2"],
+    "Talc":           ["Mg", "SiO2"],
+    "Sepiolite":      ["Mg", "SiO2"],
+    "Chalcedony":     ["SiO2"],
+    "Quartz":         ["SiO2"],
+    "Amorphous silica":["SiO2"],
+    "SiO2(a)":        ["SiO2"],
+}
+
+# Ion display names for user-friendly messages
+_ION_DISPLAY_NAMES: Dict[str, str] = {
+    "F":    "Fluoride (F⁻)",
+    "Fe":   "Iron (Fe)",
+    "Mn":   "Manganese (Mn)",
+    "Ba":   "Barium (Ba)",
+    "Sr":   "Strontium (Sr)",
+    "PO4":  "Phosphate (PO₄)",
+    "Al":   "Aluminum (Al)",
+    "SiO2": "Silica (SiO₂)",
+    "Na":   "Sodium (Na)",
+    "K":    "Potassium (K)",
+    "Ca":   "Calcium (Ca)",
+    "Mg":   "Magnesium (Mg)",
+    "Cl":   "Chloride (Cl⁻)",
+    "SO4":  "Sulfate (SO₄²⁻)",
+    "HCO3": "Alkalinity (HCO₃⁻)",
+}
+
+
+def _get_unavailable_salts_with_reasons(
+    all_requested_salts: List[str],
+    available_salts: List[str],
+    mapped_water_params: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    """
+    For salts that were requested but not returned by PHREEQC,
+    explain WHY they are unavailable (which ions are missing).
+
+    Returns list of:
+      { "salt": "Fluorite", "reason": "Not available — Fluoride (F⁻) not in water sample" }
+    """
+    available_lower = {s.lower() for s in available_salts}
+    present_ions = {k for k, v in mapped_water_params.items()
+                    if v is not None and (
+                        (isinstance(v, dict) and float(v.get("value", 0)) > 0)
+                        or (isinstance(v, (int, float)) and float(v) > 0)
+                    )}
+
+    unavailable = []
+    for salt in (all_requested_salts or []):
+        if salt.lower() in available_lower:
+            continue  # available, skip
+
+        # Find missing ions
+        required = _MINERAL_REQUIRED_IONS.get(salt, [])
+        missing = [ion for ion in required if ion not in present_ions]
+
+        if missing:
+            missing_names = ", ".join(_ION_DISPLAY_NAMES.get(m, m) for m in missing)
+            reason = f"Not available — {missing_names} not in water sample"
+        else:
+            reason = (
+                "Not available — PHREEQC did not calculate SI for this mineral "
+                "(may not be in database or insufficient ions)"
+            )
+
+        unavailable.append({"salt": salt, "reason": reason})
+
+    return unavailable
+
+
 def _color_code_for_salt(
     si: float,
     salt_name: str,
@@ -5599,6 +5702,15 @@ class SaturationService:
             else:
                 effective_salt = available_salts[0] if available_salts else None
 
+        # Build unavailable salts with reasons (for frontend tooltip)
+        all_requested = list(set(
+            ([salt_id] if salt_id else []) +
+            (salts_of_interest or [])
+        ))
+        unavailable_salts = _get_unavailable_salts_with_reasons(
+            all_requested, available_salts, mapped
+        )
+
         # ── 13. Generate graph ────────────────────────────────────────────────
         graph_url = "not-generated"
         try:
@@ -5659,7 +5771,8 @@ class SaturationService:
             "balance_warnings":        balance_warnings, # non-empty if override happened
             "database_used":           db_used,
             "total_grid_points":       len(results),
-            "available_salts":         available_salts,  # salts PHREEQC actually calculated for this water
+            "available_salts":         available_salts,    # salts PHREEQC calculated for this water
+            "unavailable_salts":       unavailable_salts,  # requested salts not in results + reason
             "grid_results":            results,
             "graph_url":               graph_url,
             "graph_data":              graph_data,
