@@ -5583,20 +5583,21 @@ class SaturationService:
 
         # ── 12. Resolve effective salt (case-insensitive) ─────────────────────
         effective_salt = salt_id
+        available_salts: List[str] = []
         if results:
             sample_si = results[0].get("saturation_indices", {})
-            available = list(sample_si.keys())
-            logger.info(f"PHREEQC returned {len(available)} minerals: {available[:15]}")
+            available_salts = sorted(sample_si.keys())
+            logger.info(f"PHREEQC returned {len(available_salts)} minerals: {available_salts[:15]}")
 
             if salt_id:
-                found = any(k.lower() == salt_id.lower() for k in available)
+                found = any(k.lower() == salt_id.lower() for k in available_salts)
                 if not found:
-                    logger.warning(f"salt_id '{salt_id}' not found. Available: {available[:10]}. Using first.")
-                    effective_salt = available[0] if available else None
+                    logger.warning(f"salt_id '{salt_id}' not found. Available: {available_salts[:10]}. Using first.")
+                    effective_salt = available_salts[0] if available_salts else None
                 else:
-                    effective_salt = next(k for k in available if k.lower() == salt_id.lower())
+                    effective_salt = next(k for k in available_salts if k.lower() == salt_id.lower())
             else:
-                effective_salt = available[0] if available else None
+                effective_salt = available_salts[0] if available_salts else None
 
         # ── 13. Generate graph ────────────────────────────────────────────────
         graph_url = "not-generated"
@@ -5658,6 +5659,7 @@ class SaturationService:
             "balance_warnings":        balance_warnings, # non-empty if override happened
             "database_used":           db_used,
             "total_grid_points":       len(results),
+            "available_salts":         available_salts,  # salts PHREEQC actually calculated for this water
             "grid_results":            results,
             "graph_url":               graph_url,
             "graph_data":              graph_data,
@@ -5709,8 +5711,9 @@ class SaturationService:
 
         if resolved_salt is None:
             raise ValueError(
-                f"Salt '{salt_id}' not found in saved results. "
-                f"Available salts: {available[:20]}"
+                f"Salt '{salt_id}' not found in saved results for this water chemistry. "
+                f"PHREEQC only calculates SI for minerals whose required ions are present in the water. "
+                f"Available salts ({len(available)}): {available}"
             )
 
         # Re-color for resolved salt
@@ -5737,10 +5740,11 @@ class SaturationService:
         )
 
         return {
-            "run_id":     run_id,
-            "salt_id":    resolved_salt,
-            "chart_data": chart_data,
-            "summary":    summary,
+            "run_id":          run_id,
+            "salt_id":         resolved_salt,
+            "chart_data":      chart_data,
+            "summary":         summary,
+            "available_salts": available,   # frontend can use this to update dropdown
         }
 
     # ─────────────────────────────────────────────────────────────────────────
