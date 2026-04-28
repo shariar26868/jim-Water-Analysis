@@ -5481,9 +5481,11 @@ class SaturationService:
         self,
         results: List[Dict[str, Any]],
         raw_water: Dict[str, Any],
+        mapped_water: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         For each grid point, calculate LSI, RSI, PSI, CCPP, mild steel corrosion.
+        Uses mapped_water (normalized ion keys) for accurate calculations.
         """
         try:
             from app.services.calculation_service import CalculationService
@@ -5494,9 +5496,36 @@ class SaturationService:
 
         for r in results:
             try:
+                # Build params with BOTH raw keys AND normalized keys
+                # so calculation_service can find values regardless of key format
                 params: Dict[str, Any] = {}
+
+                # 1. Start with raw_water (original OCR keys like "Calcium_as_CaCO3")
                 for k, v in raw_water.items():
                     params[k] = v
+
+                # 2. Add normalized mapped keys (Ca, Mg, Cl, SO4, HCO3, etc.)
+                if mapped_water:
+                    for k, v in mapped_water.items():
+                        params[k] = v
+                    # Also add common aliases that calculation_service expects
+                    alias_map = {
+                        "Ca":   ["Calcium", "calcium"],
+                        "Mg":   ["Magnesium", "magnesium"],
+                        "Na":   ["Sodium", "sodium"],
+                        "K":    ["Potassium", "potassium"],
+                        "Cl":   ["Chloride", "chloride"],
+                        "SO4":  ["Sulfate", "Sulphate", "sulfate", "sulphate"],
+                        "HCO3": ["Alkalinity", "Bicarbonate", "alkalinity", "bicarbonate"],
+                        "SiO2": ["Silica", "Silicon", "silica"],
+                        "Fe":   ["Iron", "iron"],
+                        "PO4":  ["Phosphate", "phosphate"],
+                    }
+                    for ion_key, aliases in alias_map.items():
+                        if ion_key in mapped_water:
+                            for alias in aliases:
+                                if alias not in params:
+                                    params[alias] = mapped_water[ion_key]
 
                 # Use natural pH from CO2 equilibration (correct pH)
                 grid_ph   = float(r.get("_grid_pH") or r.get("_natural_ph_at_cold") or 7.0)
@@ -5682,7 +5711,7 @@ class SaturationService:
         )
 
         # ── 11. Add additional calculations per grid point ────────────────────
-        results = await self._add_calculations_to_results(results, raw_water)
+        results = await self._add_calculations_to_results(results, raw_water, mapped)
 
         # ── 12. Resolve effective salt (case-insensitive) ─────────────────────
         effective_salt = salt_id

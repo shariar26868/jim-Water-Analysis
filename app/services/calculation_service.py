@@ -89,13 +89,19 @@ class CalculationService:
         try:
             # Get concentrations (mg/L)
             cl = self.get_param_value(parameters, "Chloride", 0.0)
+            if cl == 0.0:
+                cl = self.get_param_value(parameters, "Cl", 0.0)
             so4 = self.get_param_value(parameters, "Sulfate", 0.0)
             if so4 == 0.0:
                 so4 = self.get_param_value(parameters, "Sulphate", 0.0)
+            if so4 == 0.0:
+                so4 = self.get_param_value(parameters, "SO4", 0.0)
             
             hco3 = self.get_param_value(parameters, "Bicarbonate", 0.0)
             if hco3 == 0.0:
                 hco3 = self.get_param_value(parameters, "Alkalinity", 0.0)
+            if hco3 == 0.0:
+                hco3 = self.get_param_value(parameters, "HCO3", 0.0)
             
             co3 = self.get_param_value(parameters, "Carbonate", 0.0)
             
@@ -175,9 +181,13 @@ class CalculationService:
             # Get values
             pH = self.get_param_value(parameters, "pH", 7.0)
             ca_mg_l = self.get_param_value(parameters, "Calcium", 0.0)
+            if ca_mg_l == 0.0:
+                ca_mg_l = self.get_param_value(parameters, "Ca", 0.0)
             alk_mg_l = self.get_param_value(parameters, "Alkalinity", 0.0)
             if alk_mg_l == 0.0:
                 alk_mg_l = self.get_param_value(parameters, "Bicarbonate", 0.0)
+            if alk_mg_l == 0.0:
+                alk_mg_l = self.get_param_value(parameters, "HCO3", 0.0)
             
             temp_c = self.get_param_value(parameters, "Temperature", 25.0)
             tds = self.get_param_value(parameters, "TDS", 0.0)
@@ -262,15 +272,19 @@ class CalculationService:
             temp_c = self.get_param_value(parameters, "Temperature", 25.0)
             
             ca_mg_l = self.get_param_value(parameters, "Calcium", 0.0)
+            if ca_mg_l == 0.0:
+                ca_mg_l = self.get_param_value(parameters, "Ca", 0.0)
             alk_mg_l = self.get_param_value(parameters, "Alkalinity", 0.0)
             if alk_mg_l == 0.0:
                 alk_mg_l = self.get_param_value(parameters, "Bicarbonate", 0.0)
+            if alk_mg_l == 0.0:
+                alk_mg_l = self.get_param_value(parameters, "HCO3", 0.0)
             
-            # Convert Ca to CaCO3 equivalent
+            # Convert Ca to CaCO3 equivalent (if Ca is elemental mg/L)
             ca_as_caco3 = ca_mg_l * (100.09 / 40.08)
             
-            # Alkalinity is already as CaCO3
-            alk_as_caco3 = alk_mg_l
+            # Convert Alkalinity to CaCO3 equivalent (if HCO3 is in mg/L as HCO3)
+            alk_as_caco3 = alk_mg_l * (100.09 / 61.02)
             
             # Calculate pHs
             A = (math.log10(tds) - 1) / 10 if tds > 0 else 0
@@ -401,13 +415,19 @@ class CalculationService:
             temp_c = self.get_param_value(parameters, "Temperature", 25.0)
             
             ca_mg_l = self.get_param_value(parameters, "Calcium", 0.0)
+            if ca_mg_l == 0.0:
+                ca_mg_l = self.get_param_value(parameters, "Ca", 0.0)
             alk_mg_l = self.get_param_value(parameters, "Alkalinity", 0.0)
             if alk_mg_l == 0.0:
                 alk_mg_l = self.get_param_value(parameters, "Bicarbonate", 0.0)
+            if alk_mg_l == 0.0:
+                alk_mg_l = self.get_param_value(parameters, "HCO3", 0.0)
             
             # Convert to CaCO3
+            # If Ca is in elemental mg/L (from mapped params), convert to CaCO3
             ca_as_caco3 = ca_mg_l * (100.09 / 40.08)
-            alk_as_caco3 = alk_mg_l
+            # If alkalinity is in mg/L as HCO3 (from mapped params), convert to CaCO3
+            alk_as_caco3 = alk_mg_l * (100.09 / 61.02)
             
             # Calculate pHs components
             A = (math.log10(tds) - 1) / 10 if tds > 0 else 0
