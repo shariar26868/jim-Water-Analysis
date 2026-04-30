@@ -4805,6 +4805,11 @@ class SaturationService:
             for r in valid
         ]
 
+        max_abs_si = max([abs(z) for z in z_vals]) if len(z_vals) > 0 else 1.0
+        if max_abs_si == 0:
+            max_abs_si = 1.0
+        opacities = [0.3 + 0.7 * (abs(z) / max_abs_si) for z in z_vals]
+
         y_label = "Temperature (°C)"
         if temp_unit.upper() == "F":
             y_display = np.array([(t * 9/5) + 32 for t in y_vals])
@@ -4820,11 +4825,11 @@ class SaturationService:
         dx = max(0.3, (max(unique_x) - min(unique_x)) / max(len(unique_x), 1) * 0.7) if len(unique_x) > 1 else 0.5
         dy = max(1.5, (max(unique_y) - min(unique_y)) / max(len(unique_y), 1) * 0.7) if len(unique_y) > 1 else 5.0
 
-        for xi, yi, zi, color in zip(x_vals, y_display, z_vals, colors):
+        for xi, yi, zi, color, opacity in zip(x_vals, y_display, z_vals, colors, opacities):
             dz = abs(zi) if zi != 0 else 0.01
             z_bottom = min(zi, 0.0)
             ax.bar3d(xi - dx/2, yi - dy/2, z_bottom, dx, dy, dz,
-                     color=color, alpha=0.85, shade=True)
+                     color=color, alpha=opacity, shade=True)
 
         if x_vals.size and y_display.size:
             xx = np.linspace(x_vals.min() - dx, x_vals.max() + dx, 2)
@@ -4917,12 +4922,22 @@ class SaturationService:
                     return v.get("SI") if isinstance(v, dict) else float(v)
             return None
 
-        bars = []
+        si_vals = []
         for r in results:
+            val = _get_si(r["saturation_indices"], salt_id)
+            si_vals.append(val if val is not None else 0.0)
+            
+        max_abs_si = max([abs(s) for s in si_vals]) if si_vals else 1.0
+        if max_abs_si == 0:
+            max_abs_si = 1.0
+
+        bars = []
+        for r, si_val in zip(results, si_vals):
             temp_display = round(
                 (r["_grid_temp"] * 9/5 + 32) if temp_unit.upper() == "F" else r["_grid_temp"], 1
             )
-            si_val = _get_si(r["saturation_indices"], salt_id)
+            
+            opacity = round(0.3 + 0.7 * (abs(si_val) / max_abs_si), 3)
 
             all_si = {
                 mineral: (
@@ -4946,6 +4961,7 @@ class SaturationService:
                 "z":         temp_display,
                 "color":     r["color_code"],
                 "color_hex": _COLOUR_HEX.get(r["color_code"], "#BDC3C7"),
+                "opacity":   opacity,
                 "click_data": {
                     "CoC":              r["_grid_CoC"],
                     "temperature":      temp_display,
@@ -4977,7 +4993,7 @@ class SaturationService:
         unique_coc  = sorted(set(b["x"] for b in bars))
         unique_temp = sorted(set(b["z"] for b in bars))
 
-        def _make_bar_mesh(x_center, z_center, y_top, color_hex, dx=0.4, dz=4.0):
+        def _make_bar_mesh(x_center, z_center, y_top, color_hex, opacity, dx=0.4, dz=4.0):
             x0, x1 = x_center - dx/2, x_center + dx/2
             z0, z1 = z_center - dz/2, z_center + dz/2
             y0, y1 = min(y_top, 0.0), max(y_top, 0.0)
@@ -4992,7 +5008,7 @@ class SaturationService:
                 "x": vx, "y": vy, "z": vz,
                 "i": i, "j": j, "k": k,
                 "color":      color_hex,
-                "opacity":    0.85,
+                "opacity":    opacity,
                 "flatshading": True,
                 "showscale":  False,
                 "lighting":   {"ambient": 0.6, "diffuse": 0.8, "specular": 0.3},
@@ -5034,6 +5050,7 @@ class SaturationService:
                 z_center=bar["z"],
                 y_top=si,
                 color_hex=_COLOUR_HEX.get(bar["color"], "#BDC3C7"),
+                opacity=bar["opacity"],
                 dx=dx,
                 dz=dz,
             )
@@ -5399,13 +5416,23 @@ class SaturationService:
                     return v.get("SI") if isinstance(v, dict) else float(v)
             return None
 
-        points = []
+        si_vals = []
         for r in results:
+            val = _get_si(r["saturation_indices"], salt_id)
+            si_vals.append(val if val is not None else 0.0)
+            
+        max_abs_si = max([abs(s) for s in si_vals]) if si_vals else 1.0
+        if max_abs_si == 0:
+            max_abs_si = 1.0
+
+        points = []
+        for r, si_val in zip(results, si_vals):
             temp_display = round(
                 (r["_grid_temp"] * 9/5 + 32) if temp_unit.upper() == "F" else r["_grid_temp"], 2
             )
-            si_val = _get_si(r["saturation_indices"], salt_id)
             desc   = r.get("description_of_solution") or {}
+            
+            opacity = round(0.3 + 0.7 * (abs(si_val) / max_abs_si), 3)
 
             all_si = {
                 mineral: {
@@ -5424,6 +5451,7 @@ class SaturationService:
                 "si":          si_val,
                 "color":       r["color_code"],
                 "color_hex":   _COLOUR_HEX.get(r["color_code"], "#BDC3C7"),
+                "opacity":     opacity,
                 "ionic_strength":            r.get("ionic_strength"),
                 "charge_balance_error_pct":  r.get("charge_balance_error_pct"),
                 "activity_of_water":         desc.get("activity_of_water"),
