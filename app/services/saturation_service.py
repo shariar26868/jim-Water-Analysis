@@ -5485,6 +5485,24 @@ class SaturationService:
                 for mineral, info in r["saturation_indices"].items()
             }
 
+            # Merge indices (from _enrich_grid_points) and calculations
+            # (from _add_calculations_to_results) — calculations takes priority.
+            # This ensures all 5 indices are ALWAYS present regardless of salt.
+            _idx  = r.get("indices", {}) or {}
+            _calc = r.get("calculations", {}) or {}
+            _merged = {**_idx, **_calc}
+
+            _NA_CA_ALK = {"interpretation": "N/A", "risk": "N/A", "note": "Requires Calcium and Alkalinity in water sample"}
+            _NA_IONS   = {"interpretation": "N/A", "risk": "N/A", "note": "Requires Cl, SO4, and Alkalinity in water sample"}
+            merged_indices = {
+                "lsi":          _merged.get("lsi")          or {"lsi":      None, **_NA_CA_ALK},
+                "ryznar":       _merged.get("ryznar")       or {"ri":       None, **_NA_CA_ALK},
+                "puckorius":    _merged.get("puckorius")    or {"index":    None, **_NA_CA_ALK},
+                "ccpp":         _merged.get("ccpp")         or {"ccpp_ppm": None, **_NA_CA_ALK},
+                "stiff_davis":  _merged.get("stiff_davis")  or {"index":    None, **_NA_CA_ALK},
+                "larson_skold": _merged.get("larson_skold") or {"index":    None, **_NA_IONS},
+            }
+
             points.append({
                 "coc":         r["_grid_CoC"],
                 "temperature": temp_display,
@@ -5497,7 +5515,7 @@ class SaturationService:
                 "charge_balance_error_pct":  r.get("charge_balance_error_pct"),
                 "activity_of_water":         desc.get("activity_of_water"),
                 "all_si": all_si,
-                "indices":       r.get("indices", {}),
+                "indices":       merged_indices,
                 "water_balance": r.get("water_balance", {}),
                 "chemical":      r.get("chemical", {}),
                 "corrosion":     r.get("corrosion", {}),
