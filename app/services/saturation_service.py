@@ -5159,6 +5159,10 @@ class SaturationService:
         product_cost_per_lb = float(product_blend.get("costPerLb") or 0)
         product_name        = product_blend.get("productName") or "Product"
 
+        # Build a mapped (normalized) version of base_water_parameters for calc_svc
+        _mapped_base = _map_water_params(base_water_parameters)
+        _mapped_base = _convert_caco3_units(_mapped_base, base_water_parameters)
+
         enriched = []
         for r in results:
             coc      = r["_grid_CoC"]
@@ -5166,6 +5170,7 @@ class SaturationService:
             ph       = r["_grid_pH"]
             ionic_s  = r.get("ionic_strength", 0.0)
 
+            # Build conc_params with both raw keys AND normalized ion keys
             conc_params: Dict[str, Any] = {}
             for key, val in base_water_parameters.items():
                 if isinstance(val, dict):
@@ -5182,6 +5187,44 @@ class SaturationService:
                     conc_params[key] = {"value": numeric, "unit": unit}
                 else:
                     conc_params[key] = {"value": round(numeric * coc, 4), "unit": unit}
+
+            # Add normalized ion keys (Ca, Mg, HCO3, Cl, SO4, etc.) scaled by CoC
+            # These are what calculation_service.py actually looks for
+            _ION_ALIASES = {
+                "Ca":   ["Calcium", "calcium"],
+                "Mg":   ["Magnesium", "magnesium"],
+                "Na":   ["Sodium", "sodium"],
+                "K":    ["Potassium", "potassium"],
+                "Cl":   ["Chloride", "chloride"],
+                "SO4":  ["Sulfate", "Sulphate", "sulfate", "sulphate"],
+                "HCO3": ["Alkalinity", "Bicarbonate", "alkalinity", "bicarbonate"],
+                "SiO2": ["Silica", "Silicon", "silica"],
+                "Fe":   ["Iron", "iron"],
+                "PO4":  ["Phosphate", "phosphate"],
+                "Ba":   ["Barium", "barium"],
+                "Sr":   ["Strontium", "strontium"],
+            }
+            for ion_key, aliases in _ION_ALIASES.items():
+                if ion_key in _mapped_base:
+                    base_val = _mapped_base[ion_key]
+                    base_num = float(base_val.get("value", 0) if isinstance(base_val, dict) else base_val)
+                    scaled   = round(base_num * coc, 4)
+                    entry    = {"value": scaled, "unit": "mg/L"}
+                    # Add under normalized key (e.g. "Ca")
+                    conc_params[ion_key] = entry
+                    # Add under human-friendly aliases (e.g. "Calcium") if not already present
+                    for alias in aliases:
+                        if alias not in conc_params:
+                            conc_params[alias] = entry
+
+            # Estimate TDS from ion sum (needed by PSI/LSI when TDS not in water params)
+            _tds_ions = ["Ca", "Mg", "Na", "K", "Cl", "SO4", "HCO3", "SiO2", "Fe", "Ba", "Sr"]
+            _tds_sum = sum(
+                float(conc_params[ion].get("value", 0) if isinstance(conc_params[ion], dict) else conc_params[ion])
+                for ion in _tds_ions if ion in conc_params
+            )
+            if "TDS" not in conc_params and _tds_sum > 0:
+                conc_params["TDS"] = {"value": round(_tds_sum, 2), "unit": "mg/L"}
 
             conc_params["pH"]          = {"value": ph,     "unit": ""}
             conc_params["Temperature"] = {"value": temp_c, "unit": "C"}
@@ -5217,8 +5260,8 @@ class SaturationService:
             else:
                 try:
                     indices["lsi"] = await calc_svc.calculate_lsi(conc_params)
-                except Exception as e:
-                    indices["lsi"] = {"error": str(e)}
+                except Exception:
+                    indices["lsi"] = {"lsi": None, "interpretation": "N/A", "risk": "N/A", "note": "Requires Calcium and Alkalinity in water sample"}
 
             if calcite_si is not None:
                 lsi_val = calcite_si
@@ -5243,36 +5286,34 @@ class SaturationService:
             else:
                 try:
                     indices["ryznar"] = await calc_svc.calculate_ryznar(conc_params)
-                except Exception as e:
-                    indices["ryznar"] = {"error": str(e)}
+                except Exception:
+                    indices["ryznar"] = {"ri": None, "interpretation": "N/A", "risk": "N/A", "note": "Requires Calcium and Alkalinity in water sample"}
 
             try:
                 indices["puckorius"] = await calc_svc.calculate_puckorius(conc_params)
-            except Exception as e:
-                indices["puckorius"] = {"error": str(e)}
+            except Exception:
+                indices["puckorius"] = {"index": None, "interpretation": "N/A", "risk": "N/A", "note": "Requires Calcium and Alkalinity in water sample"}
 
             try:
                 indices["larson_skold"] = await calc_svc.calculate_larson_skold(conc_params)
-            except Exception as e:
-                indices["larson_skold"] = {"error": str(e)}
+            except Exception:
+                indices["larson_skold"] = {"index": None, "interpretation": "N/A", "risk": "N/A", "note": "Requires Cl, SO4, and Alkalinity in water sample"}
 
             try:
                 indices["stiff_davis"] = await calc_svc.calculate_stiff_davis(conc_params, ionic_s)
-            except Exception as e:
-                indices["stiff_davis"] = {"error": str(e)}
+            except Exception:
+                indices["stiff_davis"] = {"index": None, "interpretation": "N/A", "risk": "N/A", "note": "Requires Calcium and Alkalinity in water sample"}
 
             eq_phases = r.get("equilibrium_phases", {})
             calcite_moles = eq_phases.get("Calcite")
             if calcite_moles is not None:
                 ccpp_ppm = round(calcite_moles * 100.09 * 1000, 2)
             elif calcite_si is not None:
-                ca_val = 0.0
-                for k, v in base_water_parameters.items():
-                    if k.lower() in ("calcium", "ca"):
-                        ca_val = float(v.get("value", 0) if isinstance(v, dict) else v) * coc
-                        break
+                # Use normalized Ca from _mapped_base (handles CaCO3 conversion)
+                ca_base = _get_ion_value(_mapped_base, "Ca") or 0.0
+                ca_val  = ca_base * coc
                 ca_as_caco3 = ca_val * (100.09 / 40.08)
-                ccpp_ppm = round(calcite_si * ca_as_caco3 / 10, 2)
+                ccpp_ppm = round(calcite_si * ca_as_caco3 / 10, 2) if ca_as_caco3 > 0 else None
             else:
                 ccpp_ppm = None
 
@@ -5574,15 +5615,46 @@ class SaturationService:
 
                 calcs: Dict[str, Any] = {}
 
-                for method_name in ("lsi", "ryznar", "puckorius", "ccpp", "larson_skold"):
+                for method_name in ("lsi", "ryznar", "puckorius", "larson_skold"):
                     try:
                         method = getattr(calc, f"calculate_{method_name}")
-                        if method_name == "ccpp":
-                            calcs[method_name] = await method(phreeqc_output)
-                        else:
-                            calcs[method_name] = await method(params)
+                        calcs[method_name] = await method(params)
                     except Exception:
                         pass
+
+                # CCPP — needs PHREEQC equilibrium_phases or Calcite SI
+                try:
+                    # Try direct PHREEQC equilibrium_phases first
+                    ccpp_phreeqc = {
+                        "equilibrium_phases": r.get("equilibrium_phases", {}),
+                        "saturation_indices": phreeqc_output["saturation_indices"],
+                    }
+                    ccpp_result = await calc.calculate_ccpp(ccpp_phreeqc)
+                    # If calcite_moles was 0, estimate from Calcite SI instead
+                    if ccpp_result.get("ccpp_ppm") == 0 and ccpp_result.get("calcite_moles") == 0:
+                        calcite_si_val = next(
+                            (item["si_value"] for item in phreeqc_output["saturation_indices"]
+                             if item["mineral_name"].lower() == "calcite"), None
+                        )
+                        ca_conc = float(params.get("Ca", {}).get("value", 0) if isinstance(params.get("Ca"), dict) else params.get("Ca", 0))
+                        if calcite_si_val is not None and ca_conc > 0:
+                            ca_caco3 = ca_conc * (100.09 / 40.08)
+                            est_ccpp = round(calcite_si_val * ca_caco3 / 10, 2)
+                            ccpp_result = {
+                                "ccpp_ppm": est_ccpp,
+                                "interpretation": "Heavy Scale Forming" if est_ccpp > 15 else ("Slight Scale Forming" if est_ccpp > 0 else ("Slight Dissolution" if est_ccpp >= -15 else "Corrosive")),
+                                "risk": "High Scale Risk" if est_ccpp > 15 else ("Moderate Scale Risk" if est_ccpp > 0 else ("Low Corrosion" if est_ccpp >= -15 else "Corrosive")),
+                                "source": "Estimated from Calcite SI",
+                            }
+                    calcs["ccpp"] = ccpp_result
+                except Exception:
+                    pass
+
+                # Stiff & Davis — always pass ionic_strength
+                try:
+                    calcs["stiff_davis"] = await calc.calculate_stiff_davis(params, ionic_strength)
+                except Exception:
+                    pass
 
                 try:
                     sat_indices_dict = {
