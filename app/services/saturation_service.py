@@ -4629,6 +4629,7 @@ class SaturationService:
         coc_list: List[float],
         cold_temp_c: float,
         temp_list_c: List[float],
+        temp_list_raw: List[float],
         co2_factor: Optional[float],
         salt_id: Optional[str],
         salts_of_interest: Optional[List[str]],
@@ -4669,10 +4670,10 @@ class SaturationService:
         total = len(temp_list_c) * len(coc_list)
         done  = 0
 
-        for hot_temp_c in temp_list_c:
+        for hot_temp_c, hot_temp_raw in zip(temp_list_c, temp_list_raw):
             for coc in coc_list:
                 done += 1
-                logger.info(f"[{done}/{total}] CoC={coc}, eval_temp={hot_temp_c}°C ...")
+                logger.info(f"[{done}/{total}] CoC={coc}, eval_temp={hot_temp_c}°C (raw={hot_temp_raw}) ...")
 
                 # ── Step 1: natural pH at cold supply temp (cached per CoC × cold_temp) ──
                 cache_key = (coc, cold_temp_c)
@@ -4735,7 +4736,8 @@ class SaturationService:
 
                 results.append({
                     "_grid_CoC":               coc,
-                    "_grid_temp":              hot_temp_c,
+                    "_grid_temp":              round(hot_temp_raw, 2),  # user's original input value (F or C)
+                    "_grid_temp_c":            hot_temp_c,             # Celsius — for internal calcs only
                     "_grid_pH":                natural_ph,
                     "_cold_temp_c":            cold_temp_c,
                     "_natural_ph_at_cold":     natural_ph,
@@ -4810,12 +4812,9 @@ class SaturationService:
             max_abs_si = 1.0
         opacities = [0.3 + 0.7 * (abs(z) / max_abs_si) for z in z_vals]
 
-        y_label = "Temperature (°C)"
-        if temp_unit.upper() == "F":
-            y_display = np.array([(t * 9/5) + 32 for t in y_vals])
-            y_label = "Temperature (°F)"
-        else:
-            y_display = y_vals
+        # _grid_temp already stores the user's original unit value (F or C)
+        y_label = f"Temperature ({'°F' if temp_unit.upper() == 'F' else '°C'})"
+        y_display = y_vals
 
         fig = plt.figure(figsize=(13, 8), facecolor="#1A1A2E")
         ax  = fig.add_subplot(111, projection="3d", facecolor="#16213E")
@@ -4933,9 +4932,8 @@ class SaturationService:
 
         bars = []
         for r, si_val in zip(results, si_vals):
-            temp_display = round(
-                (r["_grid_temp"] * 9/5 + 32) if temp_unit.upper() == "F" else r["_grid_temp"], 1
-            )
+            # _grid_temp already stores the user's original unit value (no conversion needed)
+            temp_display = round(r["_grid_temp"], 1)
             
             opacity = round(0.3 + 0.7 * (abs(si_val) / max_abs_si), 3)
 
@@ -5166,7 +5164,7 @@ class SaturationService:
         enriched = []
         for r in results:
             coc      = r["_grid_CoC"]
-            temp_c   = r["_grid_temp"]
+            temp_c   = r.get("_grid_temp_c", r["_grid_temp"])  # use Celsius for calcs
             ph       = r["_grid_pH"]
             ionic_s  = r.get("ionic_strength", 0.0)
 
@@ -5468,9 +5466,8 @@ class SaturationService:
 
         points = []
         for r, si_val in zip(results, si_vals):
-            temp_display = round(
-                (r["_grid_temp"] * 9/5 + 32) if temp_unit.upper() == "F" else r["_grid_temp"], 2
-            )
+            # _grid_temp already stores the user's original unit value (no conversion needed)
+            temp_display = round(r["_grid_temp"], 2)
             desc   = r.get("description_of_solution") or {}
             
             opacity = round(0.3 + 0.7 * (abs(si_val) / max_abs_si), 3)
@@ -5616,7 +5613,8 @@ class SaturationService:
 
                 # Use natural pH from CO2 equilibration (correct pH)
                 grid_ph   = float(r.get("_grid_pH") or r.get("_natural_ph_at_cold") or 7.0)
-                grid_temp = float(r.get("_grid_temp") or 25.0)
+                # Use _grid_temp_c (Celsius) for calculations — _grid_temp is user's unit
+                grid_temp = float(r.get("_grid_temp_c") or r.get("_grid_temp") or 25.0)
 
                 params["pH"]          = {"value": grid_ph,   "unit": ""}
                 params["Temperature"] = {"value": grid_temp,  "unit": "°C"}
@@ -5680,7 +5678,8 @@ class SaturationService:
                         for item in phreeqc_output["saturation_indices"]
                     }
                     calcs["mild_steel_corrosion"] = await calc.calculate_mild_steel_corrosion(
-                        params, sat_indices_dict, do_ppm=5.0, temp_c=r["_grid_temp"]
+                        params, sat_indices_dict, do_ppm=5.0,
+                        temp_c=r.get("_grid_temp_c", r["_grid_temp"])  # use Celsius
                     )
                 except Exception:
                     pass
@@ -5796,16 +5795,20 @@ class SaturationService:
         temp_max_raw  = float(req.get("temp_max") or 160.0)
         temp_interval = float(req.get("temp_interval") or 10.0)
 
-        temp_list_c: List[float] = []
+        temp_list_c:   List[float] = []  # Celsius — for PHREEQC internal use
+        temp_list_raw: List[float] = []  # Original user input — for _grid_temp display
         t = temp_min_raw
         while t <= temp_max_raw + 1e-9:
             temp_list_c.append(_to_celsius(t, temp_unit))
+            temp_list_raw.append(round(t, 2))  # keep exact user input value
             t += max(temp_interval, 0.1)
 
         if not temp_list_c:
-            temp_list_c = [hot_temp_c]
+            temp_list_c   = [hot_temp_c]
+            temp_list_raw = [round(float(req.get("temp_min") or 110.0), 2)]
 
         logger.info(f"Eval temp list (°C): {temp_list_c}")
+        logger.info(f"Eval temp list (raw user unit): {temp_list_raw}")
         logger.info(f"Grid: {len(coc_list)} CoC × {len(temp_list_c)} Temp = {len(coc_list)*len(temp_list_c)} points")
 
         # ── 10. Run 2-step PHREEQC pipeline ──────────────────────────────────
@@ -5819,6 +5822,7 @@ class SaturationService:
             coc_list          = coc_list,
             cold_temp_c       = cold_temp_c,
             temp_list_c       = temp_list_c,
+            temp_list_raw     = temp_list_raw,
             co2_factor        = co2_factor,
             salt_id           = salt_id,
             salts_of_interest = salts_of_interest,
