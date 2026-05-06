@@ -5437,9 +5437,11 @@ class SaturationService:
         results: List[Dict[str, Any]],
         salt_id: Optional[str],
         temp_unit: str,
+        requested_salts: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Build frontend-ready structured data for interactive 3D bar chart.
+        requested_salts: the salts the user selected — available_salts will only show these.
         """
         temp_suffix = "°F" if temp_unit.upper() == "F" else "°C"
 
@@ -5542,11 +5544,23 @@ class SaturationService:
             "color_map":    _COLOUR_HEX,
             "color_labels": color_labels,
             "total_points": len(points),
-            "available_salts": sorted(set(
-                mineral
-                for p in points
-                for mineral in (p.get("all_si") or {}).keys()
-            )),
+            # available_salts: only user-requested salts that PHREEQC calculated
+            # If no specific salts were requested, fall back to all minerals
+            "available_salts": (
+                sorted(set(
+                    matched
+                    for req_s in (requested_salts or [])
+                    for p in points[:1]           # check first point only
+                    for mineral in (p.get("all_si") or {}).keys()
+                    for matched in ([mineral] if mineral.lower() == req_s.lower() else [])
+                ))
+                if requested_salts
+                else sorted(set(
+                    mineral
+                    for p in points
+                    for mineral in (p.get("all_si") or {}).keys()
+                ))
+            ),
             "points":       points,
         }
 
@@ -5837,29 +5851,42 @@ class SaturationService:
 
         # ── 12. Resolve effective salt (case-insensitive) ─────────────────────
         effective_salt = salt_id
-        available_salts: List[str] = []
+        phreeqc_available_salts: List[str] = []   # ALL minerals PHREEQC calculated (internal)
         if results:
             sample_si = results[0].get("saturation_indices", {})
-            available_salts = sorted(sample_si.keys())
-            logger.info(f"PHREEQC returned {len(available_salts)} minerals: {available_salts[:15]}")
+            phreeqc_available_salts = sorted(sample_si.keys())
+            logger.info(f"PHREEQC returned {len(phreeqc_available_salts)} minerals: {phreeqc_available_salts[:15]}")
 
             if salt_id:
-                found = any(k.lower() == salt_id.lower() for k in available_salts)
+                found = any(k.lower() == salt_id.lower() for k in phreeqc_available_salts)
                 if not found:
-                    logger.warning(f"salt_id '{salt_id}' not found. Available: {available_salts[:10]}. Using first.")
-                    effective_salt = available_salts[0] if available_salts else None
+                    logger.warning(f"salt_id '{salt_id}' not found. Available: {phreeqc_available_salts[:10]}. Using first.")
+                    effective_salt = phreeqc_available_salts[0] if phreeqc_available_salts else None
                 else:
-                    effective_salt = next(k for k in available_salts if k.lower() == salt_id.lower())
+                    effective_salt = next(k for k in phreeqc_available_salts if k.lower() == salt_id.lower())
             else:
-                effective_salt = available_salts[0] if available_salts else None
+                effective_salt = phreeqc_available_salts[0] if phreeqc_available_salts else None
 
-        # Build unavailable salts with reasons (for frontend tooltip)
+        # Build list of user-requested salts
         all_requested = list(set(
             ([salt_id] if salt_id else []) +
             (salts_of_interest or [])
         ))
+
+        # available_salts = only the user-selected salts that PHREEQC actually calculated
+        # (NOT all minerals — only the ones the user asked for)
+        phreeqc_lower = {k.lower(): k for k in phreeqc_available_salts}
+        available_salts: List[str] = []
+        for req_salt in all_requested:
+            matched = phreeqc_lower.get(req_salt.lower())
+            if matched:
+                available_salts.append(matched)
+        available_salts = sorted(set(available_salts))
+        logger.info(f"User-requested salts found in PHREEQC output: {available_salts}")
+
+        # unavailable_salts = user-requested salts that PHREEQC did NOT calculate (with reasons)
         unavailable_salts = _get_unavailable_salts_with_reasons(
-            all_requested, available_salts, mapped
+            all_requested, phreeqc_available_salts, mapped
         )
 
         # ── 13. Generate graph ────────────────────────────────────────────────
@@ -5922,8 +5949,8 @@ class SaturationService:
             "balance_warnings":        balance_warnings, # non-empty if override happened
             "database_used":           db_used,
             "total_grid_points":       len(results),
-            "available_salts":         available_salts,    # salts PHREEQC calculated for this water
-            "unavailable_salts":       unavailable_salts,  # requested salts not in results + reason
+            "available_salts":         available_salts,    # only user-requested salts found in PHREEQC output
+            "unavailable_salts":       unavailable_salts,  # user-requested salts PHREEQC could not calculate + reason
             "grid_results":            results,
             "graph_url":               graph_url,
             "graph_data":              graph_data,
@@ -5991,7 +6018,27 @@ class SaturationService:
             else:
                 r["color_code"] = "error"
 
-        chart_data = self._build_chart_data(results, resolved_salt, temp_unit)
+        # Determine requested salts from DB (saved salts_of_interest + current salt_id)
+        saved_salts_of_interest = doc.get("salts_of_interest") or []
+        saved_salt_id           = doc.get("salt_id") or ""
+        all_requested_in_doc    = list(set(
+            ([saved_salt_id] if saved_salt_id else []) +
+            ([salt_id] if salt_id else []) +
+            saved_salts_of_interest
+        ))
+
+        # Filter available_salts to only user-requested salts
+        phreeqc_lower = {k.lower(): k for k in available}
+        user_available_salts: List[str] = sorted(set(
+            phreeqc_lower[s.lower()]
+            for s in all_requested_in_doc
+            if s.lower() in phreeqc_lower
+        ))
+
+        chart_data = self._build_chart_data(
+            results, resolved_salt, temp_unit,
+            requested_salts=all_requested_in_doc,
+        )
         summary    = self._summary(results)
 
         await db.db["saturation_runs"].update_one(
@@ -6008,7 +6055,7 @@ class SaturationService:
             "salt_id":         resolved_salt,
             "chart_data":      chart_data,
             "summary":         summary,
-            "available_salts": available,   # frontend can use this to update dropdown
+            "available_salts": user_available_salts,   # only user-requested salts
         }
 
     # ─────────────────────────────────────────────────────────────────────────
