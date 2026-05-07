@@ -5592,6 +5592,214 @@ class SaturationService:
             "points":       points,
         }
 
+    # ── STEP: build table_data (separate from chart_data, for frontend tables) ─
+    @staticmethod
+    def _build_table_data(
+        results: List[Dict[str, Any]],
+        salt_id: Optional[str],
+        temp_unit: str,
+    ) -> Dict[str, Any]:
+        """
+        Build a flat, table-ready data structure from grid results.
+        Parallel to chart_data — lives at the top level of the response.
+        Frontend can use this directly to render tables without parsing chart_data.points.
+        """
+        temp_suffix = "°F" if temp_unit.upper() == "F" else "°C"
+
+        grid_overview: List[Dict] = []
+        saturation_indices: List[Dict] = []
+        deposition_indices: List[Dict] = []
+        water_balance: List[Dict] = []
+        chemical_dosage: List[Dict] = []
+        corrosion_rates: List[Dict] = []
+        description_of_solution: List[Dict] = []
+        distribution_of_species: List[Dict] = []
+
+        for r in results:
+            coc  = r.get("_grid_CoC")
+            temp = round(r.get("_grid_temp", 0), 2)
+            ph   = r.get("_grid_pH")
+            desc = r.get("description_of_solution") or {}
+
+            # ── 1. Grid Overview ──────────────────────────────────────────────
+            si_info = r.get("saturation_indices", {}).get(salt_id) if salt_id else None
+            if si_info is not None:
+                si_val = si_info.get("SI") if isinstance(si_info, dict) else float(si_info)
+                sr_val = si_info.get("SR") if (isinstance(si_info, dict) and si_info.get("SR") is not None) else (
+                    round(10 ** si_val, 6) if si_val is not None else None
+                )
+            else:
+                si_val = sr_val = None
+
+            grid_overview.append({
+                "coc":                      coc,
+                "temperature":              temp,
+                "temp_unit":                temp_suffix,
+                "ph":                       ph,
+                "si":                       si_val,
+                "sr":                       sr_val,
+                "color":                    r.get("color_code"),
+                "color_hex":                _COLOUR_HEX.get(r.get("color_code", ""), "#BDC3C7"),
+                "ionic_strength":           r.get("ionic_strength"),
+                "charge_balance_error_pct": r.get("charge_balance_error_pct"),
+            })
+
+            # ── 2. All Saturation Indices ─────────────────────────────────────
+            _si_rows = []
+            for mineral, info in (r.get("saturation_indices") or {}).items():
+                if isinstance(info, dict):
+                    _s  = info.get("SI")
+                    _sr = info.get("SR") if info.get("SR") is not None else (
+                        round(10 ** _s, 6) if _s is not None else None
+                    )
+                    _si_rows.append({
+                        "mineral":          mineral,
+                        "si":               _s,
+                        "sr":               _sr,
+                        "log_iap":          info.get("log_IAP"),
+                        "log_k":            info.get("log_K"),
+                        "chemical_formula": info.get("chemical_formula"),
+                    })
+                else:
+                    _s = float(info)
+                    _si_rows.append({
+                        "mineral": mineral,
+                        "si":      _s,
+                        "sr":      round(10 ** _s, 6),
+                    })
+            saturation_indices.append({
+                "coc":         coc,
+                "temperature": temp,
+                "temp_unit":   temp_suffix,
+                "minerals":    _si_rows,
+            })
+
+            # ── 3. Deposition Indices ─────────────────────────────────────────
+            idx = r.get("indices") or {}
+            calcs = r.get("calculations") or {}
+            merged = {**idx, **calcs}
+
+            def _index_row(key, full_name, val_key):
+                data = merged.get(key) or {}
+                return {
+                    "index_key":    key,
+                    "index_name":   key.upper().replace("_", "-"),
+                    "full_name":    full_name,
+                    "value":        data.get(val_key),
+                    "interpretation": data.get("interpretation"),
+                    "risk":         data.get("risk") or data.get("risk_level"),
+                }
+
+            deposition_indices.append({
+                "coc":         coc,
+                "temperature": temp,
+                "temp_unit":   temp_suffix,
+                "indices": [
+                    _index_row("lsi",          "Langelier Saturation Index",               "lsi"),
+                    _index_row("ryznar",        "Ryznar Stability Index",                   "ri"),
+                    _index_row("puckorius",     "Puckorius Scaling Index",                  "index"),
+                    _index_row("ccpp",          "Calcium Carbonate Precipitation Potential","ccpp_ppm"),
+                    _index_row("stiff_davis",   "Stiff & Davis Stability Index",            "index"),
+                    _index_row("larson_skold",  "Larson-Skold Index",                       "index"),
+                ],
+            })
+
+            # ── 4. Water Balance (per grid point) ─────────────────────────────
+            wb = r.get("water_balance") or {}
+            water_balance.append({
+                "coc":              coc,
+                "temperature":      temp,
+                "temp_unit":        temp_suffix,
+                "evaporation_gpm":  (wb.get("evaporation") or {}).get("evaporation_rate_gpm"),
+                "blowdown_gpm":     (wb.get("blowdown") or {}).get("blowdown_rate_gpm"),
+                "makeup_gpm":       (wb.get("makeup") or {}).get("makeup_rate_gpm"),
+                "drift_gpm":        (wb.get("makeup") or {}).get("drift_rate_gpm"),
+            })
+
+            # ── 5. Chemical Dosage (per grid point) ───────────────────────────
+            chem = r.get("chemical") or {}
+            lbs_day  = chem.get("lbs_per_day")
+            lbs_year = chem.get("lbs_per_year")
+            chemical_dosage.append({
+                "coc":               coc,
+                "temperature":       temp,
+                "temp_unit":         temp_suffix,
+                "product":           chem.get("product"),
+                "dosage_ppm":        chem.get("dosage_ppm"),
+                "lbs_per_day":       lbs_day,
+                "kg_per_day":        round(lbs_day * 0.453592, 4) if lbs_day else None,
+                "lbs_per_year":      lbs_year,
+                "kg_per_year":       round(lbs_year * 0.453592, 2) if lbs_year else None,
+                "cost_per_day_usd":  chem.get("cost_per_day_usd"),
+                "cost_per_year_usd": chem.get("cost_per_year_usd"),
+            })
+
+            # ── 6. Corrosion Rates ────────────────────────────────────────────
+            corr = r.get("corrosion") or {}
+            _corr_rows = []
+            metal_labels = {
+                "mild_steel":      "Mild Steel",
+                "copper":          "Copper",
+                "admiralty_brass": "Admiralty Brass",
+            }
+            for metal_key, metal_label in metal_labels.items():
+                if metal_key in corr:
+                    m = corr[metal_key]
+                    _corr_rows.append({
+                        "metal":        metal_label,
+                        "metal_key":    metal_key,
+                        "cr_mpy":       m.get("cr_mpy"),
+                        "risk_level":   m.get("risk_level") or m.get("risk"),
+                        "do_ppm_used":  m.get("do_ppm_used"),
+                    })
+            corrosion_rates.append({
+                "coc":         coc,
+                "temperature": temp,
+                "temp_unit":   temp_suffix,
+                "metals":      _corr_rows,
+            })
+
+            # ── 7. Description of Solution ────────────────────────────────────
+            description_of_solution.append({
+                "coc":                  coc,
+                "temperature":          temp,
+                "temp_unit":            temp_suffix,
+                "ph":                   desc.get("pH"),
+                "specific_conductance": desc.get("specific_conductance"),
+                "density":              desc.get("density"),
+                "activity_of_water":    desc.get("activity_of_water"),
+                "ionic_strength":       desc.get("ionic_strength_desc"),
+                "temperature_c":        desc.get("temperature_C"),
+            })
+
+            # ── 8. Distribution of Species ────────────────────────────────────
+            _species_rows = []
+            for species, sp_data in (r.get("distribution_of_species") or {}).items():
+                if isinstance(sp_data, dict):
+                    _species_rows.append({
+                        "species":  species,
+                        "molality": sp_data.get("molality"),
+                        "activity": sp_data.get("activity"),
+                        "element":  sp_data.get("element"),
+                    })
+            distribution_of_species.append({
+                "coc":         coc,
+                "temperature": temp,
+                "temp_unit":   temp_suffix,
+                "species":     _species_rows,
+            })
+
+        return {
+            "grid_overview":            grid_overview,
+            "saturation_indices":       saturation_indices,
+            "deposition_indices":       deposition_indices,
+            "water_balance":            water_balance,
+            "chemical_dosage":          chemical_dosage,
+            "corrosion_rates":          corrosion_rates,
+            "description_of_solution":  description_of_solution,
+            "distribution_of_species":  distribution_of_species,
+        }
+
     # ── STEP: summary counts ─────────────────────────────────────────────────
     @staticmethod
     def _summary(results: List[Dict]) -> Dict[str, int]:
@@ -6157,6 +6365,9 @@ class SaturationService:
         # ── 14. Build Plotly-ready graph_data ─────────────────────────────────
         graph_data = self._build_graph_data(results, effective_salt, temp_unit)
 
+        # ── 14b. Build table_data (flat, table-ready — parallel to chart_data) ─
+        table_data = self._build_table_data(results, effective_salt, temp_unit)
+
         # ── 15. Summary ───────────────────────────────────────────────────────
         summary = self._summary(results)
 
@@ -6218,6 +6429,7 @@ class SaturationService:
             "raw_material_chemistry":  req.get("raw_material_chemistry"),
             "asset_info":              asset_info,
             "cooling_tower_analysis":  cooling_tower_analysis,
+            "table_data":              table_data,
             "created_at":              datetime.now(timezone.utc).isoformat(),
         }
         await db.db["saturation_runs"].insert_one(doc)
@@ -6297,6 +6509,7 @@ class SaturationService:
             results, resolved_salt, temp_unit,
             requested_salts=all_requested_in_doc,
         )
+        table_data = self._build_table_data(results, resolved_salt, temp_unit)
         summary    = self._summary(results)
 
         await db.db["saturation_runs"].update_one(
@@ -6304,6 +6517,7 @@ class SaturationService:
             {"$set": {
                 "active_salt_id": resolved_salt,
                 "chart_data":     chart_data,
+                "table_data":     table_data,
                 "summary":        summary,
             }},
         )
@@ -6312,8 +6526,9 @@ class SaturationService:
             "run_id":          run_id,
             "salt_id":         resolved_salt,
             "chart_data":      chart_data,
+            "table_data":      table_data,
             "summary":         summary,
-            "available_salts": user_available_salts,   # only user-requested salts
+            "available_salts": user_available_salts,
         }
 
     # ─────────────────────────────────────────────────────────────────────────
