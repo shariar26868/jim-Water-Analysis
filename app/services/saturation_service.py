@@ -5491,15 +5491,26 @@ class SaturationService:
             
             opacity = round(0.3 + 0.7 * (abs(si_val) / max_abs_si), 3)
 
-            all_si = {
-                mineral: {
-                    "SI":               info.get("SI") if isinstance(info, dict) else float(info),
-                    "log_IAP":          info.get("log_IAP") if isinstance(info, dict) else None,
-                    "log_K":            info.get("log_K") if isinstance(info, dict) else None,
-                    "chemical_formula": info.get("chemical_formula") if isinstance(info, dict) else None,
-                }
-                for mineral, info in r["saturation_indices"].items()
-            }
+            all_si = {}
+            for mineral, info in r["saturation_indices"].items():
+                if isinstance(info, dict):
+                    _si = info.get("SI")
+                    _sr = info.get("SR") if info.get("SR") is not None else (
+                        round(10 ** _si, 6) if _si is not None else None
+                    )
+                    all_si[mineral] = {
+                        "SI":               _si,
+                        "SR":               _sr,
+                        "log_IAP":          info.get("log_IAP"),
+                        "log_K":            info.get("log_K"),
+                        "chemical_formula": info.get("chemical_formula"),
+                    }
+                else:
+                    _si = float(info)
+                    all_si[mineral] = {
+                        "SI": _si,
+                        "SR": round(10 ** _si, 6),
+                    }
 
             # Merge indices (from _enrich_grid_points) and calculations
             # (from _add_calculations_to_results) — calculations takes priority.
