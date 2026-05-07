@@ -210,12 +210,14 @@ class CalculationService:
             pAlk = -math.log10(alk_mol)
             
             # Calculate K coefficient
-            I = tds / 1000.0  # TDS in g/L
-            
+            # I = TDS/1000 used in exponent
+            # ionic_strength (from PHREEQC) used only for condition threshold
+            I = tds / 1000.0  # TDS in g/L → used in formula exponent
+
             if ionic_strength <= 1.2:
-                K = 2.022 * math.exp(1.737 * ionic_strength) - 0.315 * (temp_c ** 0.3)
+                K = 2.022 * math.exp(1.737 * I) - 0.315 * (temp_c ** 0.3)
             else:
-                K = 1.7 * math.exp(2.1 * ionic_strength) - 0.5 * (temp_c ** 0.4)
+                K = 1.7 * math.exp(2.1 * I) - 0.5 * (temp_c ** 0.4)
             
             # Calculate S&D Index
             sd_index = pH - pCa - pAlk - K
@@ -561,30 +563,47 @@ class CalculationService:
     ) -> Dict[str, Any]:
         """
         Estimated Mild Steel Corrosion Rate
-        
-        Base: CR_base = 0.1 × 10^(0.7) × (DO/5) × 1.11^((T-25)/10) × f(SI_CC)
-        
+
+        Base: CR_base = 0.1 × 10^(8.5 − pH) × (DO/5) × 1.1^((T-25)/10) × f(SI_CC)
+
         With inhibitors (PMA, AlSi, SnSi, TCP, ZP)
+        CR = CR_base × (1 − 0.45×i(PMA) − 0.30×j(AlSi) − 0.28×k(SnSi) − 0.35×g(TCP) − 0.25×h(ZP))
         """
         try:
+            # Get pH from parameters
+            ph = self.get_param_value(parameters, "pH", 7.0)
+
             # Get SI values
-            si_cc = saturation_indices.get("Calcite", 0.0)
+            si_cc   = saturation_indices.get("Calcite", 0.0)
             si_alsi = saturation_indices.get("AluminiumSilicate", 0.0)
             si_snsi = saturation_indices.get("TinSilicate", 0.0)
-            si_tcp = saturation_indices.get("Tricalciumphosphate", 0.0)
-            si_zp = saturation_indices.get("Zincphosphate", 0.0)
-            
+            si_tcp  = saturation_indices.get("Tricalciumphosphate", 0.0)
+            si_zp   = saturation_indices.get("Zincphosphate", 0.0)
+
             # Get inhibitor concentrations
             pma_ppm = self.get_param_value(parameters, "PMA", 0.0)
-            
-            # Base corrosion rate
-            f_si_cc = 0.7 if si_cc > 0.5 else (0.9 if si_cc >= 0 else 1.3)
-            
-            cr_base = 0.1 * (10 ** 0.7) * (do_ppm / 5.0) * (1.11 ** ((temp_c - 25) / 10)) * f_si_cc
-            
-            # Inhibitor factors
-            # PMA factor
-            if pma_ppm >= 25:
+
+            # f(SI_CC): Calcium Carbonate SI factor
+            # >+0.5 → 0.7 | 0 to +0.5 → 0.9 | ≤0 → 1.3
+            if si_cc > 0.5:
+                f_si_cc = 0.7
+            elif si_cc >= 0:
+                f_si_cc = 0.9
+            else:
+                f_si_cc = 1.3
+
+            # Base corrosion rate: CR_base = 0.1 × 10^(8.5 − pH) × (DO/5) × 1.1^((T−25)/10) × f(SI_CC)
+            cr_base = (
+                0.1
+                * (10 ** (8.5 - ph))
+                * (do_ppm / 5.0)
+                * (1.1 ** ((temp_c - 25) / 10))
+                * f_si_cc
+            )
+
+            # PMA factor — i([PMA])
+            # >25 → 1.0 | 20–25 → 0.95 | 17–20 → 0.8 | 15–17 → 0.3 | <15 → 0.0
+            if pma_ppm > 25:
                 i_pma = 1.0
             elif pma_ppm >= 20:
                 i_pma = 0.95
@@ -594,28 +613,26 @@ class CalculationService:
                 i_pma = 0.3
             else:
                 i_pma = 0.0
-            
-            # SI-based factors
-            j_alsi = 1.0 if si_alsi > 0 else 0.0
-            k_snsi = 1.0 if si_snsi > 0 else 0.0
-            g_tcp = 1.0 if si_tcp > 0.2 else (0.6 if si_tcp >= 0 else 0.0)
-            h_zp = 1.0 if si_zp > 0.1 else (0.5 if si_zp >= 0 else 0.0)
-            
-            # Calculate total inhibition
+
+            # SI-based inhibitor factors
+            j_alsi = 1.0 if si_alsi > 0  else 0.0                                        # AlSi
+            k_snsi = 1.0 if si_snsi > 0  else 0.0                                        # SnSi
+            g_tcp  = 1.0 if si_tcp > 0.2 else (0.6 if si_tcp >= 0 else 0.0)              # TCP
+            h_zp   = 1.0 if si_zp  > 0.1 else (0.5 if si_zp  >= 0 else 0.0)             # ZP
+
+            # Total inhibition (capped at 95%)
             total_inhibition = (
                 0.45 * i_pma +
                 0.30 * j_alsi +
                 0.28 * k_snsi +
-                0.35 * g_tcp +
+                0.35 * g_tcp  +
                 0.25 * h_zp
             )
-            
-            # Cap at 95%
             total_inhibition = min(total_inhibition, 0.95)
-            
+
             # Final corrosion rate
             cr_final = cr_base * (1 - total_inhibition)
-            
+
             # Rating
             if cr_final < 2:
                 rating = "Excellent"
@@ -625,19 +642,33 @@ class CalculationService:
                 rating = "Fair"
             else:
                 rating = "Poor"
-            
-            logger.info(f"Mild Steel CR: {cr_final:.2f} mpy - {rating}")
-            
+
+            logger.info(f"Mild Steel CR: {cr_final:.2f} mpy - {rating} (pH={ph}, CR_base={cr_base:.3f})")
+
             return {
-                "cr_mpy": round(cr_final, 2),
-                "cr_base_mpy": round(cr_base, 2),
-                "total_inhibition_percent": round(total_inhibition * 100, 1),
-                "rating": rating
+                "cr_mpy":                    round(cr_final, 2),
+                "cr_base_mpy":               round(cr_base, 3),
+                "total_inhibition_percent":  round(total_inhibition * 100, 1),
+                "rating":                    rating,
+                "components": {
+                    "ph_used":   ph,
+                    "do_ppm":    do_ppm,
+                    "temp_c":    temp_c,
+                    "si_cc":     si_cc,
+                    "f_si_cc":   f_si_cc,
+                    "pma_ppm":   pma_ppm,
+                    "i_pma":     i_pma,
+                    "j_alsi":    j_alsi,
+                    "k_snsi":    k_snsi,
+                    "g_tcp":     g_tcp,
+                    "h_zp":      h_zp,
+                }
             }
-            
+
         except Exception as e:
             logger.error(f"Mild steel corrosion calculation failed: {e}")
             raise
+
     
     # ========================================
     # 9. COPPER CORROSION RATE

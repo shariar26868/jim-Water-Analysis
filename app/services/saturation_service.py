@@ -4937,28 +4937,43 @@ class SaturationService:
             
             opacity = round(0.3 + 0.7 * (abs(si_val) / max_abs_si), 3)
 
-            all_si = {
-                mineral: (
-                    {
-                        "SI":               info.get("SI"),
+            all_si = {}
+            for mineral, info in r["saturation_indices"].items():
+                if isinstance(info, dict):
+                    _si = info.get("SI")
+                    # SR may already be stored; if not, derive it from SI
+                    _sr = info.get("SR") if info.get("SR") is not None else (
+                        round(10 ** _si, 6) if _si is not None else None
+                    )
+                    all_si[mineral] = {
+                        "SI":               _si,
+                        "SR":               _sr,
                         "log_IAP":          info.get("log_IAP"),
                         "log_K":            info.get("log_K"),
                         "chemical_formula": info.get("chemical_formula"),
                         "phase":            info.get("phase"),
                     }
-                    if isinstance(info, dict) else {"SI": float(info)}
-                )
-                for mineral, info in r["saturation_indices"].items()
-            }
+                else:
+                    _si = float(info)
+                    all_si[mineral] = {
+                        "SI": _si,
+                        "SR": round(10 ** _si, 6),
+                    }
 
             desc = r.get("description_of_solution") or {}
 
+            # SR = 10^SI (always positive — alternative for frontends that can't render negative bars)
+            sr_val = round(10 ** si_val, 4) if si_val is not None else None
+
             bars.append({
                 "x":         r["_grid_CoC"],
-                "y":         si_val,
+                "y":         si_val,          # SI (can be negative)
+                "y_sr":      sr_val,           # SR = 10^SI (always positive, < 1 = no scale, ≥ 1 = scale)
                 "z":         temp_display,
                 "color":     r["color_code"],
                 "color_hex": _COLOUR_HEX.get(r["color_code"], "#BDC3C7"),
+                "sr_color":  "green" if (sr_val is not None and sr_val < 1) else "red",
+                "sr_color_hex": _COLOUR_HEX.get("green") if (sr_val is not None and sr_val < 1) else _COLOUR_HEX.get("red"),
                 "opacity":   opacity,
                 "click_data": {
                     "CoC":              r["_grid_CoC"],
@@ -4967,6 +4982,7 @@ class SaturationService:
                     "pH":               r["_grid_pH"],
                     "selected_salt":    salt_id,
                     "SI":               si_val,
+                    "SR":               sr_val,
                     "status":           color_labels.get(r["color_code"], r["color_code"]),
                     "ionic_strength":   r.get("ionic_strength"),
                     "charge_balance_error_pct": r.get("charge_balance_error_pct"),
@@ -4979,6 +4995,7 @@ class SaturationService:
                     "temperature":      f"{temp_display} {'°F' if temp_unit.upper() == 'F' else '°C'}",
                     "pH":               r["_grid_pH"],
                     "SI":               si_val,
+                    "SR":               sr_val,
                     "salt":             salt_id,
                     "ionic_strength":   r.get("ionic_strength"),
                     "charge_balance_error_pct": r.get("charge_balance_error_pct"),
@@ -5707,9 +5724,226 @@ class SaturationService:
         return results
 
     # ─────────────────────────────────────────────────────────────────────────
+    # COOLING TOWER ANALYSIS
+    # ─────────────────────────────────────────────────────────────────────────
+    async def _calculate_cooling_tower_analysis(
+        self,
+        asset_info: Dict[str, Any],
+        coc_list: List[float],
+        dosage_ppm: float,
+        product_blend: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Full dynamic cooling tower analysis from asset_info payload.
+        All values safely extracted with fallback defaults.
+        System-level metrics calculated once; per-CoC metrics per CoC value.
+        """
+        def _safe_float(val: Any, default: float = 0.0) -> float:
+            try:
+                return float(val) if val is not None else default
+            except (TypeError, ValueError):
+                return default
+
+        def _to_f(val: Any, unit: str) -> Optional[float]:
+            """Convert any temperature to °F."""
+            if val is None:
+                return None
+            v = _safe_float(val)
+            u = (unit or "").strip().upper().replace(" ", "")
+            if u in ("°C", "C", "CELSIUS", "DEGC"):
+                return round(v * 9 / 5 + 32, 2)
+            return round(v, 2)  # already °F
+
+        # ── Extract asset_info fields ──────────────────────────────────────────
+        recirc_raw       = asset_info.get("recirculationRate")
+        recirc_unit      = (asset_info.get("recirculationRateType") or "gpm").upper()
+        recirc_gpm       = _safe_float(recirc_raw, 0.0)
+        if "M3" in recirc_unit or "M³" in recirc_unit:
+            recirc_gpm = round(recirc_gpm * 4.40287, 2)  # m³/hr → gpm
+
+        supply_temp_raw  = asset_info.get("supplyTemperature")
+        supply_temp_unit = asset_info.get("supplyTemperatureType") or "°F"
+        cold_temp_f      = _to_f(supply_temp_raw, supply_temp_unit)
+
+        return_temp_raw  = asset_info.get("returnTemperature")
+        return_temp_unit = asset_info.get("returnTemperatureType") or "°F"
+        hot_temp_f       = _to_f(return_temp_raw, return_temp_unit)
+
+        # Ensure hot > cold (swap if inverted due to unit mismatch)
+        if hot_temp_f is not None and cold_temp_f is not None and hot_temp_f < cold_temp_f:
+            hot_temp_f, cold_temp_f = cold_temp_f, hot_temp_f
+
+        delta_raw        = asset_info.get("deltaTemperature")
+        delta_f          = abs(_safe_float(delta_raw)) if delta_raw is not None else None
+
+        wb_raw           = asset_info.get("wetBulbTempF") or asset_info.get("wetBulbTemp")
+        wb_unit          = asset_info.get("wetBulbTempUnit") or "°F"
+        wet_bulb_f       = _to_f(wb_raw, wb_unit) if wb_raw is not None else None
+
+        drift_pct        = _safe_float(asset_info.get("driftPercent"), 0.1)
+        evap_factor_pct  = _safe_float(asset_info.get("evaporationFactorPercent"), 85.0)
+        cooling_tons_in  = _safe_float(asset_info.get("tonnageOfCooling"), 0.0)
+        approach_to_wb   = _safe_float(asset_info.get("approachToWB"), 0.0)
+        skin_temp_raw    = asset_info.get("hottestSkinTemperature")
+        skin_temp_unit   = asset_info.get("hottestSkinTemperatureType") or "°F"
+        skin_temp_f      = _to_f(skin_temp_raw, skin_temp_unit) if skin_temp_raw is not None else None
+
+        pb               = product_blend or {}
+        cost_per_lb      = _safe_float(pb.get("costPerLb"), 0.0)
+        product_name     = pb.get("productName") or "Product"
+        operating_days   = int(_safe_float(pb.get("operatingDaysPerYear"), 350))
+
+        # ── System-level: Range ────────────────────────────────────────────────
+        if hot_temp_f is not None and cold_temp_f is not None:
+            range_f = round(hot_temp_f - cold_temp_f, 2)
+        elif delta_f is not None:
+            range_f = delta_f
+        else:
+            range_f = None
+
+        # ── System-level: Approach ────────────────────────────────────────────
+        if cold_temp_f is not None and wet_bulb_f is not None:
+            approach_f = round(cold_temp_f - wet_bulb_f, 2)
+        elif approach_to_wb > 0:
+            approach_f = approach_to_wb
+        else:
+            approach_f = None
+
+        # ── System-level: Dissolved Oxygen ────────────────────────────────────
+        ref_temp_f = hot_temp_f if hot_temp_f is not None else cold_temp_f
+        if ref_temp_f is not None:
+            tw_c  = round((ref_temp_f - 32) * 5 / 9, 2)
+            if wet_bulb_f is not None:
+                twb_c = round((wet_bulb_f - 32) * 5 / 9, 2)
+            elif skin_temp_f is not None:
+                twb_c = round((skin_temp_f - 32) * 5 / 9, 2)
+            else:
+                twb_c = max(tw_c - 5.0, 5.0)
+            do_ppm_sys = round(max(0.0, 14.6 - 0.41 * tw_c - 0.05 * (tw_c - twb_c)), 2)
+        else:
+            tw_c = twb_c = None
+            do_ppm_sys = 5.0
+
+        # ── Build system dict ──────────────────────────────────────────────────
+        system: Dict[str, Any] = {
+            "recirculation_rate_gpm": recirc_gpm if recirc_gpm > 0 else None,
+            "hot_water_temp_f":       hot_temp_f,
+            "cold_water_temp_f":      cold_temp_f,
+            "wet_bulb_temp_f":        wet_bulb_f,
+            "skin_temp_f":            skin_temp_f,
+            "drift_percent":          drift_pct,
+            "evaporation_factor_pct": evap_factor_pct,
+            "cooling_tons_input":     cooling_tons_in if cooling_tons_in > 0 else None,
+            "range": {
+                "range_f": range_f,
+                "note":    "hot_water_temp_f − cold_water_temp_f" if (hot_temp_f and cold_temp_f) else
+                           "from deltaTemperature" if delta_f else "Insufficient temperature data",
+            },
+            "approach": {
+                "approach_f": approach_f,
+                **({"source": "approachToWB field"} if approach_to_wb > 0 and wet_bulb_f is None else {}),
+                **({"note": "Wet bulb temperature not provided"} if approach_f is None else {}),
+            },
+            "efficiency": (
+                {"efficiency_percent": round((range_f / (range_f + approach_f)) * 100, 2)}
+                if range_f is not None and approach_f is not None and (range_f + approach_f) > 0
+                else {"efficiency_percent": None, "note": "Range or Approach not available"}
+            ),
+            "heat_load": (
+                {"heat_load_btu_hr": round(500 * recirc_gpm * range_f, 0),
+                 "heat_load_tons":   round(500 * recirc_gpm * range_f / 12000, 2)}
+                if recirc_gpm > 0 and range_f is not None
+                else {"heat_load_btu_hr": None, "note": "Recirculation rate or range not available"}
+            ),
+            "cooling_tons": (
+                {"calculated_tons": round((recirc_gpm * range_f) / 30, 2),
+                 "input_tons":      cooling_tons_in if cooling_tons_in > 0 else None}
+                if recirc_gpm > 0 and range_f is not None and range_f > 0
+                else {"calculated_tons": None,
+                      "input_tons": cooling_tons_in if cooling_tons_in > 0 else None}
+            ),
+            "dissolved_oxygen": {
+                "do_ppm":          do_ppm_sys,
+                "water_temp_c":    tw_c,
+                "wet_bulb_temp_c": twb_c,
+                **({"note": "wet bulb estimated (5°C below water temp)"} if wet_bulb_f is None and skin_temp_f is None and ref_temp_f is not None else {}),
+                **({"note": "Default fallback (temperatures not provided)"} if ref_temp_f is None else {}),
+            },
+        }
+
+        # ── Per-CoC calculations ───────────────────────────────────────────────
+        per_coc: List[Dict[str, Any]] = []
+        for coc in coc_list:
+            entry: Dict[str, Any] = {"coc": coc}
+
+            # Evaporation Rate
+            if recirc_gpm > 0 and range_f is not None:
+                evap_gpm = round(0.01 * recirc_gpm * (range_f / 10.0) * (evap_factor_pct / 100.0), 3)
+                entry["evaporation"] = {
+                    "evaporation_rate_gpm": evap_gpm,
+                    "evaporation_factor_pct": evap_factor_pct,
+                }
+            else:
+                evap_gpm = None
+                entry["evaporation"] = {"evaporation_rate_gpm": None, "note": "Recirculation rate or range not available"}
+
+            # Blowdown Rate
+            if evap_gpm is not None and coc > 1:
+                bd_gpm = round(evap_gpm / (coc - 1), 3)
+                entry["blowdown"] = {"blowdown_rate_gpm": bd_gpm}
+            elif coc <= 1:
+                bd_gpm = None
+                entry["blowdown"] = {"blowdown_rate_gpm": None, "note": "CoC must be > 1"}
+            else:
+                bd_gpm = None
+                entry["blowdown"] = {"blowdown_rate_gpm": None, "note": "Evaporation rate not available"}
+
+            # Makeup Rate
+            if evap_gpm is not None and bd_gpm is not None:
+                drift_gpm  = round(recirc_gpm * (drift_pct / 100.0), 4)
+                makeup_gpm = round(evap_gpm + bd_gpm + drift_gpm, 3)
+                entry["makeup"] = {
+                    "makeup_rate_gpm":      makeup_gpm,
+                    "evaporation_rate_gpm": evap_gpm,
+                    "blowdown_rate_gpm":    bd_gpm,
+                    "drift_rate_gpm":       drift_gpm,
+                    "drift_percent":        drift_pct,
+                }
+            else:
+                entry["makeup"] = {"makeup_rate_gpm": None, "note": "Evaporation or blowdown not available"}
+
+            # Chemical Dosage
+            chem: Dict[str, Any] = {"product": product_name, "dosage_ppm": dosage_ppm}
+            if bd_gpm is not None and bd_gpm > 0:
+                million_lbs_bd = round((bd_gpm * 60 * 24 * 8.34) / 1_000_000, 6)
+                chem_lbs_day   = round(dosage_ppm * million_lbs_bd, 4)
+                chem_lbs_year  = round(chem_lbs_day * operating_days, 2)
+                chem.update({
+                    "million_lbs_blowdown_per_day": million_lbs_bd,
+                    "lbs_per_day":                  chem_lbs_day,
+                    "lbs_per_year":                 chem_lbs_year,
+                    "operating_days_per_year":      operating_days,
+                })
+                if cost_per_lb > 0:
+                    chem.update({
+                        "cost_per_million_lbs_bd": round(dosage_ppm * cost_per_lb, 2),
+                        "cost_per_day_usd":        round(chem_lbs_day * cost_per_lb, 4),
+                        "cost_per_year_usd":       round(chem_lbs_year * cost_per_lb, 2),
+                    })
+            else:
+                chem.update({"lbs_per_day": None, "lbs_per_year": None,
+                             "note": "Blowdown not available (CoC ≤ 1 or data missing)"})
+            entry["chemical"] = chem
+
+            per_coc.append(entry)
+
+        return {"system": system, "per_coc": per_coc}
+
+    # ─────────────────────────────────────────────────────────────────────────
     # PUBLIC: run_analysis
     # ─────────────────────────────────────────────────────────────────────────
     async def run_analysis(self, req: Dict[str, Any]) -> Dict[str, Any]:
+
         run_id = str(uuid.uuid4())
         logger.info(f"Saturation run started  run_id={run_id}")
 
@@ -5849,6 +6083,18 @@ class SaturationService:
         # ── 11. Add additional calculations per grid point ────────────────────
         results = await self._add_calculations_to_results(results, raw_water, mapped)
 
+        # ── 11b. Cooling Tower Analysis ────────────────────────────────────────
+        try:
+            cooling_tower_analysis = await self._calculate_cooling_tower_analysis(
+                asset_info   = asset_info,
+                coc_list     = coc_list,
+                dosage_ppm   = float(req.get("dosage_ppm") or 2.0),
+                product_blend= req.get("product_blend"),
+            )
+        except Exception as e:
+            logger.warning(f"Cooling tower analysis failed (non-fatal): {e}")
+            cooling_tower_analysis = {"error": str(e)}
+
         # ── 12. Resolve effective salt (case-insensitive) ─────────────────────
         effective_salt = salt_id
         phreeqc_available_salts: List[str] = []   # ALL minerals PHREEQC calculated (internal)
@@ -5960,6 +6206,7 @@ class SaturationService:
             "product_blend":           req.get("product_blend"),
             "raw_material_chemistry":  req.get("raw_material_chemistry"),
             "asset_info":              asset_info,
+            "cooling_tower_analysis":  cooling_tower_analysis,
             "created_at":              datetime.now(timezone.utc).isoformat(),
         }
         await db.db["saturation_runs"].insert_one(doc)
