@@ -6572,10 +6572,13 @@ class SaturationService:
         for r in results:
             si_info = r["saturation_indices"].get(resolved_salt)
             if si_info is not None:
-                si_val = si_info.get("SI", si_info) if isinstance(si_info, dict) else float(si_info)
-                r["color_code"] = _color_code_for_salt(
-                    float(si_val), resolved_salt, inhibited_salts, thresholds
-                )
+                assigned_color = "green"
+                if "per_salt_colors" in r:
+                    for m_name, m_color in r["per_salt_colors"].items():
+                        if m_name.lower() == resolved_salt.lower():
+                            assigned_color = m_color
+                            break
+                r["color_code"] = assigned_color
             else:
                 r["color_code"] = "error"
 
@@ -6618,6 +6621,7 @@ class SaturationService:
             "salt_id":         resolved_salt,
             "chart_data":      chart_data,
             "table_data":      table_data,
+            "thresholds":      thresholds,
             "summary":         summary,
             "available_salts": user_available_salts,
         }
