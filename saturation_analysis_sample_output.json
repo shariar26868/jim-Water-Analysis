@@ -1,0 +1,890 @@
+{
+  "run_id": "sat-run-2024-05-09-12345abc",
+  "salt_id": "Calcite",
+  "salts_of_interest": ["Calcite", "Gypsum", "Barite"],
+  "dosage_ppm": 2.0,
+  "coc_min": 2.0,
+  "coc_max": 8.0,
+  "coc_interval": 1.0,
+  "cold_basin_temp_c": 18.33,
+  "hot_basin_temp_c": 32.22,
+  "temp_unit": "F",
+  "ph_mode": "natural",
+  "fixed_ph": null,
+  "co2_factor": -3.2,
+  "adjustment_chemical": "H2SO4",
+  "balance_cation_requested": "Na",
+  "balance_anion_requested": "Cl",
+  "balance_cation": "Na",
+  "balance_anion": "Cl",
+  "balance_warnings": [],
+  "database_used": "phreeqc.dat",
+  "total_grid_points": 49,
+  "available_salts": [
+    "Calcite",
+    "Gypsum",
+    "Barite",
+    "Strontianite",
+    "Fluorite"
+  ],
+  "unavailable_salts": [
+    {
+      "salt": "Halite",
+      "reason": "Required ions (Na, Cl) not in sufficient concentration or missing from water analysis"
+    }
+  ],
+  "created_at": "2024-05-09T12:30:45.123456+00:00",
+  "base_water_parameters": {
+    "Calcium_as_CaCO3": 150.5,
+    "Magnesium_as_CaCO3": 85.2,
+    "Sodium": 42.0,
+    "Chloride": 200.3,
+    "Sulfate": 185.0,
+    "Alkalinity_as_CaCO3": 220.0,
+    "Silica": 25.5,
+    "pH": 7.85,
+    "Temperature": 75.0,
+    "Potassium": 12.0,
+    "Iron": 0.5,
+    "Manganese": 0.1,
+    "Fluoride": 1.2,
+    "Barium": 0.05,
+    "Strontium": 2.5
+  },
+  "thresholds": {
+    "max_si_at_dose": 0.85,
+    "yellow_lower": 0.4075,
+    "yellow_upper": 1.2925,
+    "band_lower_pct": 5.0,
+    "band_upper_pct": 5.0,
+    "formula_used": "Dose = 0.0358 x SI(CaCO3) + 0.5272"
+  },
+  "summary": {
+    "green": 28,
+    "yellow": 15,
+    "red": 6,
+    "error": 0
+  },
+  "grid_results": [
+    {
+      "_grid_CoC": 2.0,
+      "_grid_temp": 75.0,
+      "_grid_temp_c": 23.89,
+      "_grid_pH": 7.82,
+      "_cold_temp_c": 18.33,
+      "_natural_ph_at_cold": 7.65,
+      "color_code": "green",
+      "per_salt_colors": {
+        "Calcite": "green",
+        "Gypsum": "yellow",
+        "Barite": "green"
+      },
+      "ionic_strength": 0.0485,
+      "charge_balance_error_pct": 0.89,
+      "electrical_balance": 0.0087,
+      "specific_conductance": 785.2,
+      "density": 0.997,
+      "saturation_indices": {
+        "Calcite": {
+          "SI": -0.15,
+          "SR": 0.708,
+          "log_IAP": -8.65,
+          "log_K": -8.5,
+          "phase": "CaCO3",
+          "chemical_formula": "CaCO3"
+        },
+        "Gypsum": {
+          "SI": 0.25,
+          "SR": 1.778,
+          "log_IAP": -4.85,
+          "log_K": -5.1,
+          "phase": "CaSO4:2H2O",
+          "chemical_formula": "CaSO4·2H2O"
+        },
+        "Barite": {
+          "SI": -2.45,
+          "SR": 0.00355,
+          "log_IAP": -9.95,
+          "log_K": -7.5,
+          "phase": "BaSO4",
+          "chemical_formula": "BaSO4"
+        },
+        "Strontianite": {
+          "SI": -1.35,
+          "SR": 0.0447,
+          "log_IAP": -8.45,
+          "log_K": -7.1,
+          "phase": "SrCO3",
+          "chemical_formula": "SrCO3"
+        },
+        "Fluorite": {
+          "SI": -2.85,
+          "SR": 0.00141,
+          "log_IAP": -10.25,
+          "log_K": -7.4,
+          "phase": "CaF2",
+          "chemical_formula": "CaF2"
+        }
+      },
+      "description_of_solution": {
+        "pH": 7.82,
+        "pe": 4.0,
+        "specific_conductance": 785.2,
+        "activity_of_water": 0.9987,
+        "ionic_strength_desc": 0.0485,
+        "temperature_C": 23.89,
+        "density": 0.997,
+        "mass_of_water_kg": 1.0
+      },
+      "distribution_of_species": {
+        "Ca+2": {
+          "molality": 0.00374,
+          "activity": 0.00289,
+          "element": "Ca"
+        },
+        "HCO3-": {
+          "molality": 0.00362,
+          "activity": 0.00256,
+          "element": "C"
+        },
+        "Na+": {
+          "molality": 0.00183,
+          "activity": 0.00165,
+          "element": "Na"
+        },
+        "Cl-": {
+          "molality": 0.00565,
+          "activity": 0.00398,
+          "element": "Cl"
+        },
+        "SO4-2": {
+          "molality": 0.00193,
+          "activity": 0.00089,
+          "element": "S"
+        },
+        "Mg+2": {
+          "molality": 0.00352,
+          "activity": 0.00272,
+          "element": "Mg"
+        },
+        "CO3-2": {
+          "molality": 0.00000285,
+          "activity": 0.000000883,
+          "element": "C"
+        },
+        "H+": {
+          "molality": 0.0000000151,
+          "activity": 0.0000000152,
+          "element": "H"
+        },
+        "OH-": {
+          "molality": 0.00000000661,
+          "activity": 0.00000000467,
+          "element": "O"
+        }
+      },
+      "calculations": {
+        "lsi": {
+          "lsi": -0.28,
+          "interpretation": "Slightly Corrosive",
+          "risk": "Low Corrosion Risk"
+        },
+        "ryznar": {
+          "ri": 8.1,
+          "interpretation": "Slightly Corrosive",
+          "risk": "Low Corrosion Risk"
+        },
+        "puckorius": {
+          "index": 6.65,
+          "interpretation": "Moderately Scale Forming",
+          "risk": "Moderate Scale Risk"
+        },
+        "ccpp": {
+          "ccpp_ppm": 12.5,
+          "interpretation": "Slight Scale Forming",
+          "risk": "Moderate Scale Risk",
+          "source": "PHREEQC Equilibrium Phases"
+        },
+        "stiff_davis": {
+          "index": 7.8,
+          "interpretation": "Stable",
+          "risk": "Acceptable Range"
+        },
+        "larson_skold": {
+          "index": 0.68,
+          "interpretation": "Low Corrosion Risk",
+          "risk": "Safe"
+        },
+        "mild_steel_corrosion": {
+          "cr_mpy": 2.3,
+          "risk_level": "Low Corrosion Risk",
+          "do_ppm_used": 5.0
+        }
+      }
+    },
+    {
+      "_grid_CoC": 3.0,
+      "_grid_temp": 75.0,
+      "_grid_temp_c": 23.89,
+      "_grid_pH": 7.91,
+      "_cold_temp_c": 18.33,
+      "_natural_ph_at_cold": 7.65,
+      "color_code": "yellow",
+      "per_salt_colors": {
+        "Calcite": "yellow",
+        "Gypsum": "red",
+        "Barite": "green"
+      },
+      "ionic_strength": 0.0721,
+      "charge_balance_error_pct": 1.05,
+      "electrical_balance": 0.0105,
+      "specific_conductance": 1175.8,
+      "density": 0.9968,
+      "saturation_indices": {
+        "Calcite": {
+          "SI": 0.35,
+          "SR": 2.239,
+          "log_IAP": -8.15,
+          "log_K": -8.5,
+          "phase": "CaCO3",
+          "chemical_formula": "CaCO3"
+        },
+        "Gypsum": {
+          "SI": 0.58,
+          "SR": 3.802,
+          "log_IAP": -4.52,
+          "log_K": -5.1,
+          "phase": "CaSO4:2H2O",
+          "chemical_formula": "CaSO4·2H2O"
+        },
+        "Barite": {
+          "SI": -2.15,
+          "SR": 0.00708,
+          "log_IAP": -9.65,
+          "log_K": -7.5,
+          "phase": "BaSO4",
+          "chemical_formula": "BaSO4"
+        },
+        "Strontianite": {
+          "SI": -0.85,
+          "SR": 0.1413,
+          "log_IAP": -7.95,
+          "log_K": -7.1,
+          "phase": "SrCO3",
+          "chemical_formula": "SrCO3"
+        },
+        "Fluorite": {
+          "SI": -2.45,
+          "SR": 0.00355,
+          "log_IAP": -9.85,
+          "log_K": -7.4,
+          "phase": "CaF2",
+          "chemical_formula": "CaF2"
+        }
+      },
+      "description_of_solution": {
+        "pH": 7.91,
+        "pe": 4.2,
+        "specific_conductance": 1175.8,
+        "activity_of_water": 0.9985,
+        "ionic_strength_desc": 0.0721,
+        "temperature_C": 23.89,
+        "density": 0.9968,
+        "mass_of_water_kg": 1.0
+      },
+      "distribution_of_species": {
+        "Ca+2": {
+          "molality": 0.00561,
+          "activity": 0.00398,
+          "element": "Ca"
+        },
+        "HCO3-": {
+          "molality": 0.00543,
+          "activity": 0.00312,
+          "element": "C"
+        },
+        "Na+": {
+          "molality": 0.00275,
+          "activity": 0.00223,
+          "element": "Na"
+        },
+        "Cl-": {
+          "molality": 0.00848,
+          "activity": 0.00521,
+          "element": "Cl"
+        },
+        "SO4-2": {
+          "molality": 0.00290,
+          "activity": 0.00112,
+          "element": "S"
+        },
+        "Mg+2": {
+          "molality": 0.00528,
+          "activity": 0.00348,
+          "element": "Mg"
+        }
+      },
+      "calculations": {
+        "lsi": {
+          "lsi": 0.42,
+          "interpretation": "Slightly Scale Forming",
+          "risk": "Low Scale Risk"
+        },
+        "ryznar": {
+          "ri": 7.49,
+          "interpretation": "Slightly Scale Forming",
+          "risk": "Low Scale Risk"
+        },
+        "puckorius": {
+          "index": 7.15,
+          "interpretation": "Moderately Scale Forming",
+          "risk": "Moderate Scale Risk"
+        },
+        "ccpp": {
+          "ccpp_ppm": 18.75,
+          "interpretation": "Slight Scale Forming",
+          "risk": "Moderate Scale Risk",
+          "source": "PHREEQC Equilibrium Phases"
+        },
+        "stiff_davis": {
+          "index": 8.2,
+          "interpretation": "Stable",
+          "risk": "Acceptable Range"
+        },
+        "larson_skold": {
+          "index": 0.92,
+          "interpretation": "Low Corrosion Risk",
+          "risk": "Safe"
+        }
+      }
+    },
+    {
+      "_grid_CoC": 8.0,
+      "_grid_temp": 75.0,
+      "_grid_temp_c": 23.89,
+      "_grid_pH": 8.25,
+      "_cold_temp_c": 18.33,
+      "_natural_ph_at_cold": 7.65,
+      "color_code": "red",
+      "per_salt_colors": {
+        "Calcite": "red",
+        "Gypsum": "red",
+        "Barite": "yellow"
+      },
+      "ionic_strength": 0.1925,
+      "charge_balance_error_pct": 1.42,
+      "electrical_balance": 0.0142,
+      "specific_conductance": 3142.5,
+      "density": 0.9941,
+      "saturation_indices": {
+        "Calcite": {
+          "SI": 1.45,
+          "SR": 28.184,
+          "log_IAP": -7.05,
+          "log_K": -8.5,
+          "phase": "CaCO3",
+          "chemical_formula": "CaCO3"
+        },
+        "Gypsum": {
+          "SI": 1.28,
+          "SR": 19.055,
+          "log_IAP": -3.82,
+          "log_K": -5.1,
+          "phase": "CaSO4:2H2O",
+          "chemical_formula": "CaSO4·2H2O"
+        },
+        "Barite": {
+          "SI": -1.35,
+          "SR": 0.0447,
+          "log_IAP": -8.85,
+          "log_K": -7.5,
+          "phase": "BaSO4",
+          "chemical_formula": "BaSO4"
+        },
+        "Strontianite": {
+          "SI": 0.95,
+          "SR": 8.913,
+          "log_IAP": -6.15,
+          "log_K": -7.1,
+          "phase": "SrCO3",
+          "chemical_formula": "SrCO3"
+        },
+        "Fluorite": {
+          "SI": -1.65,
+          "SR": 0.0224,
+          "log_IAP": -9.05,
+          "log_K": -7.4,
+          "phase": "CaF2",
+          "chemical_formula": "CaF2"
+        }
+      },
+      "description_of_solution": {
+        "pH": 8.25,
+        "pe": 4.8,
+        "specific_conductance": 3142.5,
+        "activity_of_water": 0.9973,
+        "ionic_strength_desc": 0.1925,
+        "temperature_C": 23.89,
+        "density": 0.9941,
+        "mass_of_water_kg": 1.0
+      },
+      "distribution_of_species": {
+        "Ca+2": {
+          "molality": 0.01498,
+          "activity": 0.00845,
+          "element": "Ca"
+        },
+        "HCO3-": {
+          "molality": 0.00812,
+          "activity": 0.00342,
+          "element": "C"
+        },
+        "CO3-2": {
+          "molality": 0.00287,
+          "activity": 0.000412,
+          "element": "C"
+        },
+        "Na+": {
+          "molality": 0.00733,
+          "activity": 0.00521,
+          "element": "Na"
+        },
+        "Cl-": {
+          "molality": 0.02262,
+          "activity": 0.01185,
+          "element": "Cl"
+        },
+        "SO4-2": {
+          "molality": 0.00773,
+          "activity": 0.00198,
+          "element": "S"
+        },
+        "Mg+2": {
+          "molality": 0.01407,
+          "activity": 0.00652,
+          "element": "Mg"
+        }
+      },
+      "calculations": {
+        "lsi": {
+          "lsi": 1.52,
+          "interpretation": "Heavy Scale Forming",
+          "risk": "High Scale Risk"
+        },
+        "ryznar": {
+          "ri": 5.98,
+          "interpretation": "Heavy Scale Forming",
+          "risk": "High Scale Risk"
+        },
+        "puckorius": {
+          "index": 8.65,
+          "interpretation": "Heavily Scale Forming",
+          "risk": "High Scale Risk"
+        },
+        "ccpp": {
+          "ccpp_ppm": 52.5,
+          "interpretation": "Heavy Scale Forming",
+          "risk": "High Scale Risk",
+          "source": "PHREEQC Equilibrium Phases"
+        },
+        "stiff_davis": {
+          "index": 9.1,
+          "interpretation": "Aggressively Scale Forming",
+          "risk": "High Scale Risk"
+        },
+        "larson_skold": {
+          "index": 1.85,
+          "interpretation": "Scale Forming",
+          "risk": "High Scale Risk"
+        }
+      }
+    }
+  ],
+  "graph_url": "https://aws-s3-bucket.s3.amazonaws.com/saturation-graphs/sat-run-2024-05-09-12345abc.html",
+  "graph_data": {
+    "layout": {
+      "title": "Saturation Analysis - Calcite",
+      "scene": {
+        "xaxis": {
+          "title": "Cycles of Concentration (CoC)",
+          "backgroundcolor": "rgb(240, 240, 240)"
+        },
+        "yaxis": {
+          "title": "Saturation Index (SI)",
+          "backgroundcolor": "rgb(240, 240, 240)"
+        },
+        "zaxis": {
+          "title": "Temperature (°F)",
+          "backgroundcolor": "rgb(240, 240, 240)"
+        },
+        "camera": {
+          "eye": {
+            "x": 1.5,
+            "y": 1.5,
+            "z": 1.3
+          }
+        }
+      },
+      "autosize": true,
+      "margin": {
+        "l": 65,
+        "r": 50,
+        "b": 65,
+        "t": 90
+      }
+    },
+    "points": [
+      {
+        "x": 2.0,
+        "y": -0.15,
+        "y_sr": 0.708,
+        "z": 75.0,
+        "color": "green",
+        "color_hex": "#2ECC71",
+        "sr_color": "green",
+        "sr_color_hex": "#2ECC71",
+        "opacity": 0.3,
+        "click_data": {
+          "CoC": 2.0,
+          "temperature": 75.0,
+          "temperature_unit": "°F",
+          "pH": 7.82,
+          "selected_salt": "Calcite",
+          "SI": -0.15,
+          "SR": 0.708,
+          "status": "Protected (Green)",
+          "ionic_strength": 0.0485,
+          "charge_balance_error_pct": 0.89,
+          "density": 0.997,
+          "activity_of_water": 0.9987,
+          "all_saturation_indices": {
+            "Calcite": {
+              "SI": -0.15,
+              "SR": 0.708,
+              "log_IAP": -8.65,
+              "log_K": -8.5,
+              "chemical_formula": "CaCO3",
+              "phase": "CaCO3"
+            },
+            "Gypsum": {
+              "SI": 0.25,
+              "SR": 1.778,
+              "log_IAP": -4.85,
+              "log_K": -5.1,
+              "chemical_formula": "CaSO4·2H2O",
+              "phase": "CaSO4:2H2O"
+            },
+            "Barite": {
+              "SI": -2.45,
+              "SR": 0.00355,
+              "log_IAP": -9.95,
+              "log_K": -7.5,
+              "chemical_formula": "BaSO4",
+              "phase": "BaSO4"
+            }
+          }
+        },
+        "tooltip": {
+          "CoC": 2.0,
+          "temperature": "75.0 °F",
+          "pH": 7.82,
+          "SI": -0.15,
+          "SR": 0.708,
+          "salt": "Calcite",
+          "ionic_strength": 0.0485,
+          "charge_balance_error_pct": 0.89,
+          "density": 0.997,
+          "activity_of_water": 0.9987,
+          "all_saturation_indices": {
+            "Calcite": {
+              "SI": -0.15,
+              "SR": 0.708
+            }
+          }
+        }
+      }
+    ]
+  },
+  "table_data": {
+    "grid_overview": [
+      {
+        "coc": 2.0,
+        "temperature": 75.0,
+        "temp_unit": "°F",
+        "ph": 7.82,
+        "si": -0.15,
+        "sr": 0.708,
+        "color": "green",
+        "color_hex": "#2ECC71",
+        "ionic_strength": 0.0485,
+        "charge_balance_error_pct": 0.89
+      }
+    ],
+    "saturation_indices": [
+      {
+        "coc": 2.0,
+        "temperature": 75.0,
+        "temp_unit": "°F",
+        "minerals": [
+          {
+            "mineral": "Calcite",
+            "si": -0.15,
+            "sr": 0.708,
+            "log_iap": -8.65,
+            "log_k": -8.5,
+            "chemical_formula": "CaCO3"
+          },
+          {
+            "mineral": "Gypsum",
+            "si": 0.25,
+            "sr": 1.778,
+            "log_iap": -4.85,
+            "log_k": -5.1,
+            "chemical_formula": "CaSO4·2H2O"
+          },
+          {
+            "mineral": "Barite",
+            "si": -2.45,
+            "sr": 0.00355,
+            "log_iap": -9.95,
+            "log_k": -7.5,
+            "chemical_formula": "BaSO4"
+          }
+        ]
+      }
+    ],
+    "deposition_indices": [
+      {
+        "coc": 2.0,
+        "temperature": 75.0,
+        "temp_unit": "°F",
+        "indices": [
+          {
+            "index_key": "lsi",
+            "index_name": "LSI",
+            "full_name": "Langelier Saturation Index",
+            "value": -0.28,
+            "interpretation": "Slightly Corrosive",
+            "risk": "Low Corrosion Risk"
+          },
+          {
+            "index_key": "ryznar",
+            "index_name": "RSI",
+            "full_name": "Ryznar Stability Index",
+            "value": 8.1,
+            "interpretation": "Slightly Corrosive",
+            "risk": "Low Corrosion Risk"
+          },
+          {
+            "index_key": "puckorius",
+            "index_name": "PSI",
+            "full_name": "Puckorius Scaling Index",
+            "value": 6.65,
+            "interpretation": "Moderately Scale Forming",
+            "risk": "Moderate Scale Risk"
+          },
+          {
+            "index_key": "ccpp",
+            "index_name": "CCPP",
+            "full_name": "Calcium Carbonate Precipitation Potential",
+            "value": 12.5,
+            "interpretation": "Slight Scale Forming",
+            "risk": "Moderate Scale Risk"
+          },
+          {
+            "index_key": "stiff_davis",
+            "index_name": "STIFF-DAVIS",
+            "full_name": "Stiff & Davis Stability Index",
+            "value": 7.8,
+            "interpretation": "Stable",
+            "risk": "Acceptable Range"
+          },
+          {
+            "index_key": "larson_skold",
+            "index_name": "LARSON-SKOLD",
+            "full_name": "Larson-Skold Index",
+            "value": 0.68,
+            "interpretation": "Low Corrosion Risk",
+            "risk": "Safe"
+          }
+        ]
+      }
+    ],
+    "water_balance": [
+      {
+        "coc": 2.0,
+        "temperature": 75.0,
+        "temp_unit": "°F",
+        "evaporation_gpm": 150.5,
+        "blowdown_gpm": 75.25,
+        "makeup_gpm": 225.75,
+        "drift_gpm": 0.5
+      }
+    ],
+    "chemical_dosage": [
+      {
+        "coc": 2.0,
+        "temperature": 75.0,
+        "temp_unit": "°F",
+        "product": "Inhibitor A-500",
+        "dosage_ppm": 2.0,
+        "lbs_per_day": 125.3,
+        "kg_per_day": 56.85,
+        "lbs_per_year": 45733.45,
+        "kg_per_year": 20755.02,
+        "cost_per_day_usd": 45.25,
+        "cost_per_year_usd": 16516.25
+      }
+    ],
+    "corrosion_rates": [
+      {
+        "coc": 2.0,
+        "temperature": 75.0,
+        "temp_unit": "°F",
+        "metals": [
+          {
+            "metal": "Mild Steel",
+            "metal_key": "mild_steel",
+            "cr_mpy": 2.3,
+            "risk_level": "Low Corrosion Risk",
+            "do_ppm_used": 5.0
+          },
+          {
+            "metal": "Copper",
+            "metal_key": "copper",
+            "cr_mpy": 0.15,
+            "risk_level": "Very Low Corrosion Risk",
+            "do_ppm_used": 5.0
+          },
+          {
+            "metal": "Admiralty Brass",
+            "metal_key": "admiralty_brass",
+            "cr_mpy": 0.08,
+            "risk_level": "Very Low Corrosion Risk",
+            "do_ppm_used": 5.0
+          }
+        ]
+      }
+    ],
+    "description_of_solution": [
+      {
+        "coc": 2.0,
+        "temperature": 75.0,
+        "temp_unit": "°F",
+        "ph": 7.82,
+        "specific_conductance": 785.2,
+        "density": 0.997,
+        "activity_of_water": 0.9987,
+        "ionic_strength": 0.0485,
+        "temperature_c": 23.89
+      }
+    ],
+    "distribution_of_species": [
+      {
+        "coc": 2.0,
+        "temperature": 75.0,
+        "temp_unit": "°F",
+        "species": [
+          {
+            "species": "Ca+2",
+            "molality": 0.00374,
+            "activity": 0.00289,
+            "element": "Ca"
+          },
+          {
+            "species": "HCO3-",
+            "molality": 0.00362,
+            "activity": 0.00256,
+            "element": "C"
+          },
+          {
+            "species": "Na+",
+            "molality": 0.00183,
+            "activity": 0.00165,
+            "element": "Na"
+          },
+          {
+            "species": "Cl-",
+            "molality": 0.00565,
+            "activity": 0.00398,
+            "element": "Cl"
+          },
+          {
+            "species": "SO4-2",
+            "molality": 0.00193,
+            "activity": 0.00089,
+            "element": "S"
+          }
+        ]
+      }
+    ]
+  },
+  "product_blend": {
+    "product_id": "PROD-001",
+    "product_name": "Cooling Tower Inhibitor A-500",
+    "concentration_percent": 25.0,
+    "active_ingredients": ["Phosphonate", "Zinc", "Corrosion Inhibitor"],
+    "dosage_ppm": 2.0,
+    "treatment_application": "Threshold Inhibitor + Corrosion Inhibitor"
+  },
+  "raw_material_chemistry": {
+    "inhibitionFormulas": [
+      {
+        "salToInhibit": "Calcite",
+        "formulaForInhibitionPerformance": "Dose = 0.0358 x SI(CaCO3) + 0.5272",
+        "bandLowerCushion": "5",
+        "bandUpperCushion": "5"
+      },
+      {
+        "salToInhibit": "Gypsum",
+        "formulaForInhibitionPerformance": "Dose = 0.0125 x SI(CaSO4) + 0.75",
+        "bandLowerCushion": "7",
+        "bandUpperCushion": "7"
+      }
+    ],
+    "chemicalComposition": [
+      {
+        "chemical": "Polyphosphonate",
+        "concentration_ppm": 15.0,
+        "function": "Threshold Inhibitor"
+      },
+      {
+        "chemical": "Zinc Carbonate",
+        "concentration_ppm": 2.5,
+        "function": "Corrosion Inhibitor"
+      },
+      {
+        "chemical": "Alkalinity Buffer",
+        "concentration_ppm": 7.5,
+        "function": "pH Stabilization"
+      }
+    ]
+  },
+  "asset_info": {
+    "asset_id": "TOWER-001",
+    "asset_name": "Cooling Tower - Unit A",
+    "location": "Building 5 - Production Floor",
+    "system_type": "Cooling Tower",
+    "tower_type": "Counterflow",
+    "fill_type": "Film Fill - High Efficiency",
+    "draft_type": "Induced Draft",
+    "circulation_rate_gpm": 1000,
+    "basin_volume_gallons": 5000,
+    "approach_to_wb_f": 7.5,
+    "range_f": 15.0,
+    "basin_surface_area_sqft": 250
+  },
+  "cooling_tower_analysis": {
+    "circulation_rate_gpm": 1000,
+    "approach_to_wb_f": 7.5,
+    "range_f": 15.0,
+    "basin_volume_gallons": 5000,
+    "evaporation_loss_percent": 1.5,
+    "drift_loss_percent": 0.05,
+    "blowdown_gpm": 75.25,
+    "makeup_gpm": 225.75,
+    "evaporation_gpm": 150.5,
+    "thermal_capacity_mw": 5.25,
+    "system_efficiency_percent": 92.5
+  }
+}

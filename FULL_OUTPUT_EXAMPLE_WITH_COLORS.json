@@ -1,0 +1,487 @@
+{
+  "run_id": "sat-run-2026-05-11-calcite-hedp-5ppm",
+  "status": "success",
+  "execution_time_seconds": 45.32,
+  "salt_id": "Calcite",
+  "salts_of_interest": [
+    "Anhydrite",
+    "Calcite",
+    "Gypsum",
+    "Dolomite"
+  ],
+  "dosage_ppm": 5.0,
+  "coc_min": 1,
+  "coc_max": 10,
+  "coc_interval": 3,
+  "temp_min": 110,
+  "temp_max": 160,
+  "temp_interval": 20,
+  "temp_unit": "F",
+  "ph_mode": "fixed",
+  "fixed_ph": 8.2,
+  "co2_factor": -3.15,
+  "adjustment_chemical": "H2SO4",
+  "balance_cation_requested": "Na",
+  "balance_anion_requested": "Cl",
+  "balance_cation": "Na",
+  "balance_anion": "Cl",
+  "balance_warnings": [],
+  "database_used": "phreeqc.dat",
+  "total_grid_points": 12,
+  "available_salts": [
+    "Anhydrite",
+    "Calcite",
+    "Gypsum",
+    "Dolomite",
+    "Quartz",
+    "Chalcedony"
+  ],
+  "unavailable_salts": [],
+  "created_at": "2026-05-11T10:30:00.000000+00:00",
+  "base_water_parameters": {
+    "Calcium_as_CaCO3": 80,
+    "Magnesium_as_CaCO3": 40,
+    "Sodium": 150,
+    "Chloride": 250,
+    "Alkalinity_as_CaCO3": 150,
+    "Sulfate": 60,
+    "Silicon": 15,
+    "pH": 8.2,
+    "Temperature": 110,
+    "Iron": 0.1,
+    "Phosphate": 0.5,
+    "Conductivity": 300
+  },
+  "raw_material_applied": {
+    "rawMaterialId": "rm-001-hedp",
+    "commonName": "HEDP - Phosphonate",
+    "dosage_ppm": 5.0,
+    "activePercentage": 60,
+    "breakpoint_sr_calculations": {
+      "Calcite": {
+        "formula": "Dose = (0.0001 x SR^2) + (0.0376 x SR) + 0.2175",
+        "applicable_ionic_strength": "<0.1",
+        "breakpoint_sr": 97.18,
+        "band_lower_cushion_pct": 10,
+        "band_upper_cushion_pct": 10,
+        "green_threshold": 87.46,
+        "yellow_lower_threshold": 87.46,
+        "yellow_upper_threshold": 106.9,
+        "red_threshold": 106.9,
+        "notes": "Solved quadratic: 0.0001*SR^2 + 0.0376*SR + 0.2175 = 5.0"
+      },
+      "Gypsum": {
+        "formula": "Dose = (0.025 x SR) + 0.15",
+        "applicable_ionic_strength": "<0.5",
+        "breakpoint_sr": 193.0,
+        "band_lower_cushion_pct": 10,
+        "band_upper_cushion_pct": 10,
+        "green_threshold": 173.7,
+        "yellow_lower_threshold": 173.7,
+        "yellow_upper_threshold": 212.3,
+        "red_threshold": 212.3,
+        "notes": "Solved linear: (5.0 - 0.15) / 0.025 = 193.0"
+      }
+    }
+  },
+  "dataset_statistics": {
+    "min_ionic_strength": 0.032,
+    "max_ionic_strength": 0.089,
+    "min_sr_calcite": 0.25,
+    "max_sr_calcite": 18.5,
+    "color_summary": {
+      "green": 7,
+      "yellow": 3,
+      "red": 2
+    }
+  },
+  "grid_results": [
+    {
+      "_grid_CoC": 1,
+      "_grid_temp_f": 110,
+      "_grid_temp_c": 43.33,
+      "_grid_pH": 8.2,
+      "_cold_temp_c": 29.44,
+      "_natural_ph_at_cold": 8.15,
+      "color_code": "green",
+      "per_salt_colors": {
+        "Calcite": "green",
+        "Gypsum": "green",
+        "Dolomite": "green",
+        "Anhydrite": "green",
+        "Quartz": "yellow",
+        "Chalcedony": "green"
+      },
+      "ionic_strength": 0.032,
+      "charge_balance_error_pct": 1.2,
+      "electrical_balance": 0.0056,
+      "specific_conductance": 280,
+      "density": 0.995,
+      "saturation_indices": {
+        "Calcite": {
+          "SI": -0.62,
+          "SR": 0.24,
+          "log_IAP": -9.12,
+          "log_K": -8.5,
+          "phase": "CaCO3",
+          "chemical_formula": "CaCO3",
+          "color_reason": "SR(0.24) < green_threshold(87.46) = GREEN - Well inhibited"
+        },
+        "Gypsum": {
+          "SI": -0.88,
+          "SR": 0.132,
+          "log_IAP": -5.08,
+          "log_K": -4.2,
+          "phase": "CaSO4:2H2O",
+          "chemical_formula": "CaSO4·2H2O",
+          "color_reason": "SR(0.132) < green_threshold(173.7) = GREEN - Well inhibited"
+        },
+        "Dolomite": {
+          "SI": -1.15,
+          "SR": 0.071,
+          "log_IAP": -17.85,
+          "log_K": -16.7,
+          "phase": "CaMg(CO3)2",
+          "chemical_formula": "CaMg(CO3)₂",
+          "color_reason": "No inhibition formula = SR<1 = GREEN"
+        },
+        "Anhydrite": {
+          "SI": -1.25,
+          "SR": 0.056,
+          "log_IAP": -5.15,
+          "log_K": -3.9,
+          "phase": "CaSO4",
+          "chemical_formula": "CaSO4",
+          "color_reason": "No inhibition formula = SR<1 = GREEN"
+        },
+        "Quartz": {
+          "SI": 0.15,
+          "SR": 1.41,
+          "log_IAP": -3.85,
+          "log_K": -4.0,
+          "phase": "SiO2",
+          "chemical_formula": "SiO2",
+          "color_reason": "No inhibition formula = SR≥1 = YELLOW"
+        },
+        "Chalcedony": {
+          "SI": -0.05,
+          "SR": 0.89,
+          "log_IAP": -3.85,
+          "log_K": -3.8,
+          "phase": "SiO2",
+          "chemical_formula": "SiO2",
+          "color_reason": "No inhibition formula = SR<1 = GREEN"
+        }
+      },
+      "description_of_solution": {
+        "pH": 8.2,
+        "pe": 3.8,
+        "specific_conductance": 280,
+        "activity_of_water": 0.999,
+        "ionic_strength": 0.032,
+        "temperature_C": 43.33,
+        "density": 0.995,
+        "mass_of_water_kg": 1.0
+      }
+    },
+    {
+      "_grid_CoC": 4,
+      "_grid_temp_f": 130,
+      "_grid_temp_c": 54.44,
+      "_grid_pH": 8.2,
+      "_cold_temp_c": 29.44,
+      "_natural_ph_at_cold": 8.15,
+      "color_code": "yellow",
+      "per_salt_colors": {
+        "Calcite": "yellow",
+        "Gypsum": "green",
+        "Dolomite": "red",
+        "Anhydrite": "red",
+        "Quartz": "red",
+        "Chalcedony": "yellow"
+      },
+      "ionic_strength": 0.058,
+      "charge_balance_error_pct": 0.95,
+      "electrical_balance": 0.0042,
+      "specific_conductance": 385,
+      "density": 0.989,
+      "saturation_indices": {
+        "Calcite": {
+          "SI": 0.35,
+          "SR": 2.24,
+          "log_IAP": -8.15,
+          "log_K": -8.5,
+          "phase": "CaCO3",
+          "chemical_formula": "CaCO3",
+          "color_reason": "yellow_lower(87.46) ≤ SR(2.24) < yellow_upper(106.9) = YELLOW - Caution zone"
+        },
+        "Gypsum": {
+          "SI": -0.45,
+          "SR": 0.355,
+          "log_IAP": -4.65,
+          "log_K": -4.2,
+          "phase": "CaSO4:2H2O",
+          "chemical_formula": "CaSO4·2H2O",
+          "color_reason": "SR(0.355) < green_threshold(173.7) = GREEN - Well inhibited"
+        },
+        "Dolomite": {
+          "SI": 1.28,
+          "SR": 19.05,
+          "log_IAP": -15.42,
+          "log_K": -16.7,
+          "phase": "CaMg(CO3)2",
+          "chemical_formula": "CaMg(CO3)₂",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Scaling risk"
+        },
+        "Anhydrite": {
+          "SI": 0.95,
+          "SR": 8.91,
+          "log_IAP": -4.15,
+          "log_K": -3.9,
+          "phase": "CaSO4",
+          "chemical_formula": "CaSO4",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Scaling risk"
+        },
+        "Quartz": {
+          "SI": 0.52,
+          "SR": 3.31,
+          "log_IAP": -3.48,
+          "log_K": -4.0,
+          "phase": "SiO2",
+          "chemical_formula": "SiO2",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Scaling risk"
+        },
+        "Chalcedony": {
+          "SI": 0.32,
+          "SR": 2.09,
+          "log_IAP": -3.48,
+          "log_K": -3.8,
+          "phase": "SiO2",
+          "chemical_formula": "SiO2",
+          "color_reason": "No inhibition formula = SR≥1 = YELLOW - Moderate scaling risk"
+        }
+      },
+      "description_of_solution": {
+        "pH": 8.2,
+        "pe": 3.9,
+        "specific_conductance": 385,
+        "activity_of_water": 0.998,
+        "ionic_strength": 0.058,
+        "temperature_C": 54.44,
+        "density": 0.989,
+        "mass_of_water_kg": 1.0
+      }
+    },
+    {
+      "_grid_CoC": 7,
+      "_grid_temp_f": 150,
+      "_grid_temp_c": 65.56,
+      "_grid_pH": 8.2,
+      "_cold_temp_c": 29.44,
+      "_natural_ph_at_cold": 8.15,
+      "color_code": "red",
+      "per_salt_colors": {
+        "Calcite": "red",
+        "Gypsum": "yellow",
+        "Dolomite": "red",
+        "Anhydrite": "red",
+        "Quartz": "red",
+        "Chalcedony": "red"
+      },
+      "ionic_strength": 0.089,
+      "charge_balance_error_pct": 0.78,
+      "electrical_balance": 0.0031,
+      "specific_conductance": 520,
+      "density": 0.981,
+      "saturation_indices": {
+        "Calcite": {
+          "SI": 1.85,
+          "SR": 70.79,
+          "log_IAP": -6.65,
+          "log_K": -8.5,
+          "phase": "CaCO3",
+          "chemical_formula": "CaCO3",
+          "color_reason": "SR(70.79) < red_threshold(106.9) but analysis: RED - High supersaturation despite inhibitor"
+        },
+        "Gypsum": {
+          "SI": 0.18,
+          "SR": 1.51,
+          "log_IAP": -4.02,
+          "log_K": -4.2,
+          "phase": "CaSO4:2H2O",
+          "chemical_formula": "CaSO4·2H2O",
+          "color_reason": "yellow_lower(173.7) not met, but IS above applicable range (>0.5), YELLOW - Outside formula range"
+        },
+        "Dolomite": {
+          "SI": 2.45,
+          "SR": 281.8,
+          "log_IAP": -14.25,
+          "log_K": -16.7,
+          "phase": "CaMg(CO3)2",
+          "chemical_formula": "CaMg(CO3)₂",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Severe scaling risk"
+        },
+        "Anhydrite": {
+          "SI": 1.82,
+          "SR": 66.07,
+          "log_IAP": -3.08,
+          "log_K": -3.9,
+          "phase": "CaSO4",
+          "chemical_formula": "CaSO4",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Severe scaling risk"
+        },
+        "Quartz": {
+          "SI": 0.95,
+          "SR": 8.91,
+          "log_IAP": -3.05,
+          "log_K": -4.0,
+          "phase": "SiO2",
+          "chemical_formula": "SiO2",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Severe scaling risk"
+        },
+        "Chalcedony": {
+          "SI": 0.75,
+          "SR": 5.62,
+          "log_IAP": -3.05,
+          "log_K": -3.8,
+          "phase": "SiO2",
+          "chemical_formula": "SiO2",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Significant scaling risk"
+        }
+      },
+      "description_of_solution": {
+        "pH": 8.2,
+        "pe": 4.0,
+        "specific_conductance": 520,
+        "activity_of_water": 0.997,
+        "ionic_strength": 0.089,
+        "temperature_C": 65.56,
+        "density": 0.981,
+        "mass_of_water_kg": 1.0
+      }
+    },
+    {
+      "_grid_CoC": 10,
+      "_grid_temp_f": 160,
+      "_grid_temp_c": 71.11,
+      "_grid_pH": 8.2,
+      "_cold_temp_c": 29.44,
+      "_natural_ph_at_cold": 8.15,
+      "color_code": "red",
+      "per_salt_colors": {
+        "Calcite": "red",
+        "Gypsum": "red",
+        "Dolomite": "red",
+        "Anhydrite": "red",
+        "Quartz": "red",
+        "Chalcedony": "red"
+      },
+      "ionic_strength": 0.095,
+      "charge_balance_error_pct": 0.65,
+      "electrical_balance": 0.0025,
+      "specific_conductance": 585,
+      "density": 0.978,
+      "saturation_indices": {
+        "Calcite": {
+          "SI": 2.35,
+          "SR": 223.87,
+          "log_IAP": -6.15,
+          "log_K": -8.5,
+          "phase": "CaCO3",
+          "chemical_formula": "CaCO3",
+          "color_reason": "SR(223.87) ≥ red_threshold(106.9) = RED - Inhibitor overwhelmed at high CoC"
+        },
+        "Gypsum": {
+          "SI": 0.65,
+          "SR": 4.47,
+          "log_IAP": -3.55,
+          "log_K": -4.2,
+          "phase": "CaSO4:2H2O",
+          "chemical_formula": "CaSO4·2H2O",
+          "color_reason": "SR(4.47) ≥ red_threshold(212.3) but outside applicable IS range (>0.5), RED"
+        },
+        "Dolomite": {
+          "SI": 3.05,
+          "SR": 1122.02,
+          "log_IAP": -13.65,
+          "log_K": -16.7,
+          "phase": "CaMg(CO3)2",
+          "chemical_formula": "CaMg(CO3)₂",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Severe scaling risk"
+        },
+        "Anhydrite": {
+          "SI": 2.45,
+          "SR": 281.84,
+          "log_IAP": -2.45,
+          "log_K": -3.9,
+          "phase": "CaSO4",
+          "chemical_formula": "CaSO4",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Severe scaling risk"
+        },
+        "Quartz": {
+          "SI": 1.35,
+          "SR": 22.39,
+          "log_IAP": -2.65,
+          "log_K": -4.0,
+          "phase": "SiO2",
+          "chemical_formula": "SiO2",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Severe scaling risk"
+        },
+        "Chalcedony": {
+          "SI": 1.15,
+          "SR": 14.13,
+          "log_IAP": -2.65,
+          "log_K": -3.8,
+          "phase": "SiO2",
+          "chemical_formula": "SiO2",
+          "color_reason": "No inhibition formula = SR≥1 = RED - Severe scaling risk"
+        }
+      },
+      "description_of_solution": {
+        "pH": 8.2,
+        "pe": 4.1,
+        "specific_conductance": 585,
+        "activity_of_water": 0.996,
+        "ionic_strength": 0.095,
+        "temperature_C": 71.11,
+        "density": 0.978,
+        "mass_of_water_kg": 1.0
+      }
+    }
+  ],
+  "color_legend": {
+    "green": {
+      "description": "Safe zone - No scaling risk",
+      "criteria": "With inhibitor: SR < (1 - 10%) × BreakpointSR | Without inhibitor: SR < 1"
+    },
+    "yellow": {
+      "description": "Caution zone - Monitor conditions",
+      "criteria": "With inhibitor: (1 - 10%) × BreakpointSR ≤ SR ≤ (1 + 10%) × BreakpointSR | Without inhibitor: SR ≥ 1 (no inhibitor data)"
+    },
+    "red": {
+      "description": "Danger zone - Scaling risk present",
+      "criteria": "With inhibitor: SR > (1 + 10%) × BreakpointSR | Without inhibitor: SR ≥ 1"
+    }
+  },
+  "recommendations": {
+    "dosage_adequacy": "At CoC=5, current dosage (5.0 ppm) is adequate for Calcite control but marginal. Consider increasing to 7-8 ppm for higher CoC values.",
+    "critical_salts": [
+      "Calcite - Monitored with HEDP at this dosage",
+      "Dolomite - No inhibitor available, monitor at CoC>3",
+      "Anhydrite - No inhibitor available, monitor at CoC>3"
+    ],
+    "action_items": [
+      "Maintain pH control at 8.2 ± 0.2",
+      "Monitor for deposits at CoC > 5",
+      "Consider increasing HEDP dosage for CoC > 7 OR reduce CoC to < 5",
+      "Evaluate additional inhibitors for Dolomite/Anhydrite if CoC must exceed 5"
+    ]
+  },
+  "notes": [
+    "Colors calculated using dynamic BreakpointSR method based on input dosage and inhibition formulas",
+    "Dataset ionic strength range [0.032, 0.095] falls within <0.1 applicable range for Calcite formula",
+    "Gypsum formula applicable to IS < 0.5; all data points meet this criteria",
+    "Minerals without inhibition formulas use base color logic: GREEN if SR < 1, RED if SR ≥ 1",
+    "BreakpointSR calculated by solving inhibition performance formulas for given dosage"
+  ]
+}

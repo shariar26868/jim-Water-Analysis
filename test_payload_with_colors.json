@@ -1,0 +1,130 @@
+{
+  "salt_id": "Calcite",
+  "salts_of_interest": [
+    "Anhydrite",
+    "Calcite",
+    "Gypsum",
+    "Dolomite"
+  ],
+  "dosage_ppm": 5.0,
+  "coc_min": 1,
+  "coc_max": 10,
+  "coc_interval": 3,
+  "temp_min": 110,
+  "temp_max": 160,
+  "temp_interval": 20,
+  "temp_unit": "F",
+  "ph_mode": "fixed",
+  "fixed_ph": 8.2,
+  "adjustment_chemical": "H2SO4",
+  "balance_cation": "Na",
+  "balance_anion": "Cl",
+  "base_water_parameters": {
+    "pH": {
+      "value": 6.8,
+      "unit": "",
+      "detection_limit": null
+    },
+    "Calcium_as_CaCO3": {
+      "value": 80,
+      "unit": "mg/L",
+      "detection_limit": null
+    },
+    "Magnesium_as_CaCO3": {
+      "value": 40,
+      "unit": "mg/L",
+      "detection_limit": null
+    },
+    "Alkalinity_as_CaCO3": {
+      "value": 150,
+      "unit": "mg/L",
+      "detection_limit": null
+    },
+    "Silicon_as_SiO2": {
+      "value": 15,
+      "unit": "mg/L",
+      "detection_limit": null
+    },
+    "Chloride": {
+      "value": 50,
+      "unit": "mg/L",
+      "detection_limit": null
+    },
+    "Sulfate (SO₄)": {
+      "value": 60,
+      "unit": "mg/L",
+      "detection_limit": null
+    },
+    "Iron_Total": {
+      "value": 0.1,
+      "unit": "mg/L",
+      "detection_limit": null
+    },
+    "Phosphate_Total_as_PO4": {
+      "value": 0.5,
+      "unit": "mg/L",
+      "detection_limit": null
+    },
+    "Conductivity": {
+      "value": 300,
+      "unit": "uS/cm",
+      "detection_limit": null
+    }
+  },
+  "product_blend": null,
+  "raw_material_chemistry": {
+    "rawMaterialId": "rm-001-hedp",
+    "commonName": "HEDP - Phosphonate",
+    "activeComponentName": "1-Hydroxyethylidene-1,1-Bisphosphonate",
+    "activePercentage": 60,
+    "activePercentageChemicalFormula": "C2H8O7P2",
+    "inhibitionFormulas": [
+      {
+        "salToInhibit": "Calcite",
+        "applicableIonicStrength": "<0.1",
+        "formulaForInhibitionPerformance": "Dose = (0.0001 x SR^2) + (0.0376 x SR) + 0.2175"
+      },
+      {
+        "salToInhibit": "Calcite",
+        "applicableIonicStrength": "0.1-0.5",
+        "formulaForInhibitionPerformance": "Dose = (0.0001 x SR^2) + (0.0376 x SR) + 0.2175"
+      },
+      {
+        "salToInhibit": "Gypsum",
+        "applicableIonicStrength": "<0.5",
+        "formulaForInhibitionPerformance": "Dose = (0.025 x SR) + 0.15"
+      }
+    ],
+    "bandUpperCushion": "10%",
+    "bandLowerCushion": "10%"
+  },
+  "asset_info": {
+    "name": "CT-Tower-01",
+    "type": "Cooling Tower",
+    "towerType": "Counterflow",
+    "fillType": "Splash Fill",
+    "tonnageOfCooling": 250,
+    "deltaTemperature": 18,
+    "systemVolume": 500000,
+    "systemVolumeType": "gallons",
+    "systemMetallurgy": [
+      "Mild Steel",
+      "Copper",
+      "304 Stainless Steel"
+    ],
+    "systemMaterials": [
+      "Concrete Lined Pipe",
+      "FRP"
+    ],
+    "supplyTemperature": 85,
+    "supplyTemperatureType": "°F",
+    "returnTemperature": 103,
+    "returnTemperatureType": "°F",
+    "recirculationRate": 40000,
+    "recirculationRateType": "gpm",
+    "hottestSkinTemperature": 140,
+    "hottestSkinTemperatureType": "°F",
+    "criticalHeatExchangerFlowRate": 4.5,
+    "criticalHeatExchangerFlowRateType": "ft/s"
+  }
+}

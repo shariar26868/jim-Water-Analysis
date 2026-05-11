@@ -4268,39 +4268,86 @@ def _get_unavailable_salts_with_reasons(
         try:
             import re
             import math
-            f = formula_str.replace("x", "*").replace("X", "*").replace("×", "*")
-
-            # Try quadratic: Dose = A * SR^2 + B * SR + C
+            # Normalize formula: remove 'y =' or 'Dose =' if present, replace x/X with SR
+            f = formula_str.lower().strip()
+            f = re.sub(r'^(y|dose|d)\s*=\s*', '', f)
+            f = f.replace("x", "sr").replace("si", "sr").replace("×", "*")
+            
+            # 1. Try quadratic: A * SR^2 + B * SR + C
             mq = re.search(
-                r"=\s*([\d.]+)\s*\*?\s*S[RI][^+\-\d]*\^?\s*2\s*[+\-]\s*([\d.]+)\s*\*?\s*S[RI][^+\-\d]*[+\-]\s*([\d.]+)",
+                r"([\d.]+)\s*\*?\s*sr\s*\^?\s*2\s*([+\-])\s*([\d.]+)\s*\*?\s*sr\s*([+\-])\s*([\d.]+)",
                 f
             )
             if mq:
                 a = float(mq.group(1))
-                b_sign = -1 if "-" in formula_str[mq.start(2)-2:mq.start(2)] else 1
-                b = b_sign * float(mq.group(2))
-                c_sign = -1 if "-" in formula_str[mq.start(3)-2:mq.start(3)] else 1
-                c = c_sign * float(mq.group(3))
+                b = float(mq.group(3)) * (1 if mq.group(2) == '+' else -1)
+                c = float(mq.group(5)) * (1 if mq.group(4) == '+' else -1)
                 
+                # Equation: a*sr^2 + b*sr + (c - dosage_ppm) = 0
                 discriminant = b**2 - 4 * a * (c - dosage_ppm)
                 if discriminant >= 0:
                     sr1 = (-b + math.sqrt(discriminant)) / (2 * a)
                     sr2 = (-b - math.sqrt(discriminant)) / (2 * a)
+                    # We usually want the positive/higher root for SR
                     return max(sr1, sr2)
                 return None
 
-            # Try linear: Dose = A * SR + B (Allow SI for legacy fallback)
-            ml = re.search(r"=\s*([\d.]+)\s*\*?\s*S[RI][^+\-]*[+\-]\s*([\d.]+)", f)
+            # 2. Try linear: A * SR + B
+            ml = re.search(r"([\d.]+)\s*\*?\s*sr(?:\s*([+\-])\s*([\d.]+))?", f)
             if ml:
                 a = float(ml.group(1))
-                b_sign = -1 if "-" in formula_str[ml.start(2)-2:ml.start(2)] else 1
-                b = b_sign * float(ml.group(2))
+                b = 0.0
+                if ml.group(3):
+                    b = float(ml.group(3)) * (1 if ml.group(2) == '+' else -1)
+                
                 if a != 0:
                     return (dosage_ppm - b) / a
 
         except Exception as e:
             logger.warning(f"Could not parse SR inhibition formula '{formula_str}': {e}")
         return None
+
+    def _parse_applicable_ionic_strength(self, app_is_str: Optional[str]) -> Tuple[float, float]:
+        """
+        Parse applicable ionic strength from string format.
+        
+        Supports formats:
+        - "<0.1"       → (0.0, 0.1)
+        - "0.1-0.5"    → (0.1, 0.5)
+        - ">1.0"       → (1.0, 999.0)
+        - None/empty   → (0.0, 999.0) [covers all ranges]
+        
+        Returns: (min_is, max_is) tuple
+        """
+        if not app_is_str or isinstance(app_is_str, (int, float)):
+            return 0.0, 999.0
+        
+        app_is_str = str(app_is_str).strip()
+        
+        try:
+            # Handle "<value" format
+            if "<" in app_is_str:
+                val = float(app_is_str.replace("<", "").replace(">", "").strip())
+                return 0.0, val
+            
+            # Handle ">value" format
+            if ">" in app_is_str:
+                val = float(app_is_str.replace("<", "").replace(">", "").strip())
+                return val, 999.0
+            
+            # Handle "min-max" format
+            if "-" in app_is_str:
+                parts = app_is_str.split("-")
+                if len(parts) == 2:
+                    return float(parts[0].strip()), float(parts[1].strip())
+            
+            # Single numeric value — treat as exact match with 0.01 tolerance
+            val = float(app_is_str)
+            return val, val + 0.01
+        
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Could not parse applicableIonicStrength '{app_is_str}': {e}, defaulting to all ranges")
+            return 0.0, 999.0
 
     def _apply_dynamic_colors(
         self,
@@ -4321,7 +4368,7 @@ def _get_unavailable_salts_with_reasons(
         max_is = max(ionic_strengths) if ionic_strengths else 0.0
 
         raw_material_data = req.get("raw_material_chemistry")
-        product_data = req.get("product")
+        product_data = req.get("product_blend") or req.get("product")
         user_dosage_ppm = float(req.get("dosage_ppm") or 2.0)
 
         # 2. Extract active formulas per salt based on input
@@ -4350,25 +4397,38 @@ def _get_unavailable_salts_with_reasons(
                 if not salt_to_inhibit:
                     continue
                 
-                # Check Applicable Ionic Strength range
-                # Fallbacks to 0 and 999 if missing, meaning it covers all
-                app_is_min = float(formula_obj.get("minApplicableIonicStrength", 0.0))
-                app_is_max = float(formula_obj.get("maxApplicableIonicStrength", 999.0))
+                # Parse Applicable Ionic Strength range (handles string format: "<0.1", "0.1-0.5", etc.)
+                app_is_str = formula_obj.get("applicableIonicStrength", "")
+                app_is_min, app_is_max = self._parse_applicable_ionic_strength(app_is_str)
                 
+                # Check if dataset ionic strength is within this formula's applicable range
                 if not (min_is >= app_is_min and max_is <= app_is_max):
-                    logger.debug(f"Dataset IS range [{min_is:.4f}, {max_is:.4f}] outside formula applicable range [{app_is_min:.4f}, {app_is_max:.4f}] for {salt_to_inhibit}")
+                    logger.debug(
+                        f"Dataset IS range [{min_is:.4f}, {max_is:.4f}] outside formula applicable range "
+                        f"[{app_is_min:.4f}, {app_is_max:.4f}] for {salt_to_inhibit} (formula: {app_is_str})"
+                    )
                     continue
 
                 formula_str = formula_obj.get("formulaForInhibitionPerformance", "")
+                if not formula_str:
+                    logger.warning(f"Missing inhibition formula for salt '{salt_to_inhibit}'")
+                    continue
+                
                 breakpoint_sr = self._solve_for_sr(formula_str, dosage)
                 
-                if breakpoint_sr is not None:
-                    salt_lower = salt_to_inhibit.lower()
-                    existing = salt_breakpoints.get(salt_lower)
-                    # Use highest breakpoint for stronger protection if multiple formulas apply
-                    if not existing or existing[0] < breakpoint_sr:
-                        salt_breakpoints[salt_lower] = (breakpoint_sr, band_lower_pct, band_upper_pct)
-                        logger.info(f"Assigned BreakpointSR={breakpoint_sr:.4f} for {salt_to_inhibit} based on dose={dosage:.2f}")
+                if breakpoint_sr is None:
+                    logger.warning(f"Failed to solve SR formula for {salt_to_inhibit}: {formula_str}")
+                    continue
+                
+                salt_lower = salt_to_inhibit.lower()
+                existing = salt_breakpoints.get(salt_lower)
+                # USE LOWEST BREAKPOINT for conservative safety as per client rules
+                if not existing or existing[0] > breakpoint_sr:
+                    salt_breakpoints[salt_lower] = (breakpoint_sr, band_lower_pct, band_upper_pct)
+                    logger.info(
+                        f"Assigned BreakpointSR={breakpoint_sr:.4f} for {salt_to_inhibit} at dose={dosage:.2f}ppm "
+                        f"(Ionic Strength: {app_is_str})"
+                    )
 
         # 3. Handle Product vs Raw Material Input
         if product_data and isinstance(product_data.get("rawMaterials"), list):
@@ -4396,6 +4456,7 @@ def _get_unavailable_salts_with_reasons(
                 mineral_lower = mineral_name.lower()
                 
                 for s_to_inh, bp_data in salt_breakpoints.items():
+                    # Case-insensitive substring match
                     if s_to_inh in mineral_lower or mineral_lower in s_to_inh:
                         matched_bp = bp_data
                         break
@@ -4412,7 +4473,7 @@ def _get_unavailable_salts_with_reasons(
                     else:
                         c = "yellow"
                 else:
-                    # BASE GRAPH COLOR logic
+                    # BASE GRAPH COLOR logic: Green if SR < 1, else Red
                     if sr_val < 1:
                         c = "green"
                     else:
@@ -4422,11 +4483,19 @@ def _get_unavailable_salts_with_reasons(
 
             r["per_salt_colors"] = per_salt_colors
             
-            # Set primary color_code
-            if salt_id and salt_id in per_salt_colors:
-                r["color_code"] = per_salt_colors[salt_id]
+            # Set primary color_code (Case-insensitive match for salt_id)
+            target_salt = (salt_id or "").lower()
+            assigned_color = "green"
+            for m_name, m_color in per_salt_colors.items():
+                if m_name.lower() == target_salt:
+                    assigned_color = m_color
+                    break
             else:
-                r["color_code"] = next(iter(per_salt_colors.values()), "green")
+                # Fallback to the first available salt's color if salt_id not found
+                if per_salt_colors:
+                    assigned_color = next(iter(per_salt_colors.values()))
+            
+            r["color_code"] = assigned_color
 
         return results
 
