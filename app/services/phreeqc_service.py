@@ -266,16 +266,18 @@ class PHREEQCService:
             # Adjust ion per client formula
             if elec_balance < 0:
                 ion       = cation_ion
-                charge    = self.ION_PROPERTIES[ion]["charge"]
+                charge    = abs(self.ION_PROPERTIES[ion]["charge"])
+                mw        = self.ION_PROPERTIES[ion]["mw"]
                 current   = _get_param_value(balanced, ion) or 0.0
-                new_value = (abs(elec_balance) / abs(charge)) + current
+                new_value = current + (abs(elec_balance) / charge) * mw * 1000
                 direction = "increased"
                 logger.info(f"   Adjusting cation {ion}: {current:.4f} → {new_value:.4f}")
             else:
                 ion       = anion_ion
                 charge    = abs(self.ION_PROPERTIES[ion]["charge"])
+                mw        = self.ION_PROPERTIES[ion]["mw"]
                 current   = _get_param_value(balanced, ion) or 0.0
-                new_value = (abs(elec_balance) / charge) + current
+                new_value = current + (abs(elec_balance) / charge) * mw * 1000
                 direction = "increased"
                 logger.info(f"   Adjusting anion  {ion}: {current:.4f} → {new_value:.4f}")
 
@@ -676,8 +678,8 @@ class PHREEQCService:
                 if match:
                     parsed["electrical_balance"] = float(match.group(1))
 
-            if "% error" in line.lower() or "charge balance error" in line.lower():
-                match = re.search(r"([-+]?\d+\.?\d*)", line)
+            if "% error" in line.lower() or "percent error" in line.lower() or "charge balance error" in line.lower():
+                match = re.search(r"([-+]?\d+\.?\d*(?:[eE][-+]?\d+)?)", line.split("=")[-1] if "=" in line else line)
                 if match:
                     parsed["charge_balance_error_pct"] = float(match.group(1))
 

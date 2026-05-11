@@ -1588,6 +1588,7 @@
 
 #         return results
 
+
 #     # ─────────────────────────────────────────────────────────────────────────
 #     # PUBLIC: run_analysis
 #     # ─────────────────────────────────────────────────────────────────────────
@@ -3879,9 +3880,9 @@ _SKIP_KEYS = {
 # the elemental concentration PHREEQC expects in mg/L as element.
 # ─────────────────────────────────────────────────────────────────────────────
 _CACO3_CONVERSION_FACTOR: Dict[str, float] = {
-    "Ca":   100.09 / 40.08,   # 2.4972  (CaCO3 MW / Ca MW)
-    "Mg":   100.09 / 24.31,   # 4.1176  (CaCO3 MW / Mg MW)
-    "HCO3": 100.09 / 61.02,   # 1.6403  (CaCO3 MW / HCO3 MW)
+    "Ca":   100.086 / 40.078, # 2.497  (CaCO3 MW / Ca MW)
+    "Mg":   100.086 / 24.305, # 4.118  (CaCO3 MW / Mg MW)
+    "HCO3": 50.045 / 61.0168, # 0.8202 (CaCO3 EqW / HCO3 EqW) - note EqW for monovalent
 }
 
 # Keys whose raw_key contains "caco3" → need conversion
@@ -3957,7 +3958,7 @@ def _convert_caco3_units(mapped: Dict[str, Any], raw: Dict[str, Any]) -> Dict[st
     Conversion:
       Ca   (mg/L as CaCO3) ÷ 2.497  = Ca   (mg/L as Ca)
       Mg   (mg/L as CaCO3) ÷ 4.118  = Mg   (mg/L as Mg)
-      HCO3 (mg/L as CaCO3) ÷ 1.640  = HCO3 (mg/L as HCO3)
+      HCO3 (mg/L as CaCO3) ÷ 0.820  = HCO3 (mg/L as HCO3)
 
     Detection: raw key contains "caco3" or "as_caco" (case-insensitive).
     If the same ion appears multiple times (e.g. Calcium_as_CaCO3 AND
@@ -4262,243 +4263,6 @@ def _get_unavailable_salts_with_reasons(
 
     return unavailable
 
-    def _solve_for_sr(self, formula_str: str, dosage_ppm: float) -> Optional[float]:
-        if not formula_str:
-            return None
-        try:
-            import re
-            import math
-            # Normalize formula: remove 'y =' or 'Dose =' if present, replace x/X with SR
-            f = formula_str.lower().strip()
-            f = re.sub(r'^(y|dose|d)\s*=\s*', '', f)
-            f = f.replace("x", "sr").replace("si", "sr").replace("×", "*")
-            
-            # 1. Try quadratic: A * SR^2 + B * SR + C
-            mq = re.search(
-                r"([\d.]+)\s*\*?\s*sr\s*\^?\s*2\s*([+\-])\s*([\d.]+)\s*\*?\s*sr\s*([+\-])\s*([\d.]+)",
-                f
-            )
-            if mq:
-                a = float(mq.group(1))
-                b = float(mq.group(3)) * (1 if mq.group(2) == '+' else -1)
-                c = float(mq.group(5)) * (1 if mq.group(4) == '+' else -1)
-                
-                # Equation: a*sr^2 + b*sr + (c - dosage_ppm) = 0
-                discriminant = b**2 - 4 * a * (c - dosage_ppm)
-                if discriminant >= 0:
-                    sr1 = (-b + math.sqrt(discriminant)) / (2 * a)
-                    sr2 = (-b - math.sqrt(discriminant)) / (2 * a)
-                    # We usually want the positive/higher root for SR
-                    return max(sr1, sr2)
-                return None
-
-            # 2. Try linear: A * SR + B
-            ml = re.search(r"([\d.]+)\s*\*?\s*sr(?:\s*([+\-])\s*([\d.]+))?", f)
-            if ml:
-                a = float(ml.group(1))
-                b = 0.0
-                if ml.group(3):
-                    b = float(ml.group(3)) * (1 if ml.group(2) == '+' else -1)
-                
-                if a != 0:
-                    return (dosage_ppm - b) / a
-
-        except Exception as e:
-            logger.warning(f"Could not parse SR inhibition formula '{formula_str}': {e}")
-        return None
-
-    def _parse_applicable_ionic_strength(self, app_is_str: Optional[str]) -> Tuple[float, float]:
-        """
-        Parse applicable ionic strength from string format.
-        
-        Supports formats:
-        - "<0.1"       → (0.0, 0.1)
-        - "0.1-0.5"    → (0.1, 0.5)
-        - ">1.0"       → (1.0, 999.0)
-        - None/empty   → (0.0, 999.0) [covers all ranges]
-        
-        Returns: (min_is, max_is) tuple
-        """
-        if not app_is_str or isinstance(app_is_str, (int, float)):
-            return 0.0, 999.0
-        
-        app_is_str = str(app_is_str).strip()
-        
-        try:
-            # Handle "<value" format
-            if "<" in app_is_str:
-                val = float(app_is_str.replace("<", "").replace(">", "").strip())
-                return 0.0, val
-            
-            # Handle ">value" format
-            if ">" in app_is_str:
-                val = float(app_is_str.replace("<", "").replace(">", "").strip())
-                return val, 999.0
-            
-            # Handle "min-max" format
-            if "-" in app_is_str:
-                parts = app_is_str.split("-")
-                if len(parts) == 2:
-                    return float(parts[0].strip()), float(parts[1].strip())
-            
-            # Single numeric value — treat as exact match with 0.01 tolerance
-            val = float(app_is_str)
-            return val, val + 0.01
-        
-        except (ValueError, TypeError) as e:
-            logger.warning(f"Could not parse applicableIonicStrength '{app_is_str}': {e}, defaulting to all ranges")
-            return 0.0, 999.0
-
-    def _apply_dynamic_colors(
-        self,
-        results: List[Dict[str, Any]],
-        req: Dict[str, Any],
-        salt_id: Optional[str]
-    ) -> List[Dict[str, Any]]:
-        """
-        Dynamically applies colors to the entire dataset based on dataset min/max ionic strength,
-        product vs raw material inputs, and calculating BreakpointSR.
-        """
-        if not results:
-            return results
-
-        # 1. Determine min and max Ionic Strength for the entire dataset
-        ionic_strengths = [r.get("ionic_strength", 0.0) for r in results]
-        min_is = min(ionic_strengths) if ionic_strengths else 0.0
-        max_is = max(ionic_strengths) if ionic_strengths else 0.0
-
-        raw_material_data = req.get("raw_material_chemistry")
-        product_data = req.get("product_blend") or req.get("product")
-        user_dosage_ppm = float(req.get("dosage_ppm") or 2.0)
-
-        # 2. Extract active formulas per salt based on input
-        # Dictionary of salt_name -> (BreakpointSR, yellow_lower_cushion, yellow_upper_cushion)
-        salt_breakpoints: Dict[str, Tuple[float, float, float]] = {}
-
-        def process_raw_material(rm_data, dosage):
-            if not rm_data:
-                return
-            
-            # Helper to parse cushion values
-            def _to_float(v, default=5.0):
-                try:
-                    if isinstance(v, str):
-                        v = v.replace("%", "").strip()
-                    return float(v)
-                except (TypeError, ValueError):
-                    return default
-            
-            band_lower_pct = _to_float(rm_data.get("bandLowerCushion"), 5.0)
-            band_upper_pct = _to_float(rm_data.get("bandUpperCushion"), 5.0)
-
-            formulas = rm_data.get("inhibitionFormulas") or []
-            for formula_obj in formulas:
-                salt_to_inhibit = formula_obj.get("salToInhibit", "")
-                if not salt_to_inhibit:
-                    continue
-                
-                # Parse Applicable Ionic Strength range (handles string format: "<0.1", "0.1-0.5", etc.)
-                app_is_str = formula_obj.get("applicableIonicStrength", "")
-                app_is_min, app_is_max = self._parse_applicable_ionic_strength(app_is_str)
-                
-                # Check if dataset ionic strength is within this formula's applicable range
-                if not (min_is >= app_is_min and max_is <= app_is_max):
-                    logger.debug(
-                        f"Dataset IS range [{min_is:.4f}, {max_is:.4f}] outside formula applicable range "
-                        f"[{app_is_min:.4f}, {app_is_max:.4f}] for {salt_to_inhibit} (formula: {app_is_str})"
-                    )
-                    continue
-
-                formula_str = formula_obj.get("formulaForInhibitionPerformance", "")
-                if not formula_str:
-                    logger.warning(f"Missing inhibition formula for salt '{salt_to_inhibit}'")
-                    continue
-                
-                breakpoint_sr = self._solve_for_sr(formula_str, dosage)
-                
-                if breakpoint_sr is None:
-                    logger.warning(f"Failed to solve SR formula for {salt_to_inhibit}: {formula_str}")
-                    continue
-                
-                salt_lower = salt_to_inhibit.lower()
-                existing = salt_breakpoints.get(salt_lower)
-                # USE LOWEST BREAKPOINT for conservative safety as per client rules
-                if not existing or existing[0] > breakpoint_sr:
-                    salt_breakpoints[salt_lower] = (breakpoint_sr, band_lower_pct, band_upper_pct)
-                    logger.info(
-                        f"Assigned BreakpointSR={breakpoint_sr:.4f} for {salt_to_inhibit} at dose={dosage:.2f}ppm "
-                        f"(Ionic Strength: {app_is_str})"
-                    )
-
-        # 3. Handle Product vs Raw Material Input
-        if product_data and isinstance(product_data.get("rawMaterials"), list):
-            for rm_item in product_data.get("rawMaterials", []):
-                rm_chem = rm_item.get("rawMaterialData")
-                if not rm_chem:
-                    continue
-                pct_in_prod = float(rm_item.get("percentageInProduct", 0.0)) / 100.0
-                active_pct = float(rm_chem.get("activePercentage", 100.0)) / 100.0
-                rm_dosage = user_dosage_ppm * pct_in_prod * active_pct
-                process_raw_material(rm_chem, rm_dosage)
-        elif raw_material_data:
-            process_raw_material(raw_material_data, user_dosage_ppm)
-
-        # 4. Apply colors to results
-        for r in results:
-            si_detail = r.get("saturation_indices", {})
-            per_salt_colors = {}
-            for mineral_name, mineral_data in si_detail.items():
-                sr_val = mineral_data.get("SR")
-                if sr_val is None:
-                    sr_val = round(10 ** mineral_data.get("SI", 0.0), 6)
-                
-                matched_bp = None
-                mineral_lower = mineral_name.lower()
-                
-                for s_to_inh, bp_data in salt_breakpoints.items():
-                    # Case-insensitive substring match
-                    if s_to_inh in mineral_lower or mineral_lower in s_to_inh:
-                        matched_bp = bp_data
-                        break
-                
-                if matched_bp:
-                    bp_sr, b_lower, b_upper = matched_bp
-                    green_thresh = bp_sr * (1 - b_lower / 100.0)
-                    red_thresh = bp_sr * (1 + b_upper / 100.0)
-                    
-                    if sr_val < green_thresh:
-                        c = "green"
-                    elif sr_val >= red_thresh:
-                        c = "red"
-                    else:
-                        c = "yellow"
-                else:
-                    # BASE GRAPH COLOR logic: Green if SR < 1, else Red
-                    if sr_val < 1:
-                        c = "green"
-                    else:
-                        c = "red"
-                        
-                per_salt_colors[mineral_name] = c
-
-            r["per_salt_colors"] = per_salt_colors
-            
-            # Set primary color_code (Case-insensitive match for salt_id)
-            target_salt = (salt_id or "").lower()
-            assigned_color = "green"
-            for m_name, m_color in per_salt_colors.items():
-                if m_name.lower() == target_salt:
-                    assigned_color = m_color
-                    break
-            else:
-                # Fallback to the first available salt's color if salt_id not found
-                if per_salt_colors:
-                    assigned_color = next(iter(per_salt_colors.values()))
-            
-            r["color_code"] = assigned_color
-
-        return results
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CO2 PARTIAL PRESSURE CALCULATOR
@@ -4678,7 +4442,7 @@ class SaturationService:
         concentrated = {}
         skip_keys = {"pH", "Temperature", "pe"}
         for k, v in mapped_params.items():
-            if k in skip_keys:
+            if k in skip_keys or k.startswith("_"):
                 concentrated[k] = v
             elif isinstance(v, dict):
                 concentrated[k] = {**v, "value": v["value"] * coc}
@@ -4715,7 +4479,7 @@ class SaturationService:
         concentrated = {}
         skip_keys = {"pH", "Temperature", "pe"}
         for k, v in mapped_params.items():
-            if k in skip_keys:
+            if k in skip_keys or k.startswith("_"):
                 concentrated[k] = v
             elif isinstance(v, dict):
                 concentrated[k] = {**v, "value": v["value"] * coc}
@@ -6239,6 +6003,244 @@ class SaturationService:
             per_coc.append(entry)
 
         return {"system": system, "per_coc": per_coc}
+    def _solve_for_sr(self, formula_str: str, dosage_ppm: float) -> Optional[float]:
+        if not formula_str:
+            return None
+        try:
+            import re
+            import math
+            # Normalize formula: remove 'y =' or 'Dose =' if present, replace x/X with SR
+            f = formula_str.lower().strip()
+            f = re.sub(r'^(y|dose|d)\s*=\s*', '', f)
+            f = f.replace("x", "sr").replace("si", "sr").replace("×", "*")
+            
+            # 1. Try quadratic: A * SR^2 + B * SR + C
+            mq = re.search(
+                r"([\d.]+)\s*\*?\s*sr\s*\^?\s*2\s*([+\-])\s*([\d.]+)\s*\*?\s*sr\s*([+\-])\s*([\d.]+)",
+                f
+            )
+            if mq:
+                a = float(mq.group(1))
+                b = float(mq.group(3)) * (1 if mq.group(2) == '+' else -1)
+                c = float(mq.group(5)) * (1 if mq.group(4) == '+' else -1)
+                
+                # Equation: a*sr^2 + b*sr + (c - dosage_ppm) = 0
+                discriminant = b**2 - 4 * a * (c - dosage_ppm)
+                if discriminant >= 0:
+                    sr1 = (-b + math.sqrt(discriminant)) / (2 * a)
+                    sr2 = (-b - math.sqrt(discriminant)) / (2 * a)
+                    # We usually want the positive/higher root for SR
+                    return max(sr1, sr2)
+                return None
+
+            # 2. Try linear: A * SR + B
+            ml = re.search(r"([\d.]+)\s*\*?\s*sr(?:\s*([+\-])\s*([\d.]+))?", f)
+            if ml:
+                a = float(ml.group(1))
+                b = 0.0
+                if ml.group(3):
+                    b = float(ml.group(3)) * (1 if ml.group(2) == '+' else -1)
+                
+                if a != 0:
+                    return (dosage_ppm - b) / a
+
+        except Exception as e:
+            logger.warning(f"Could not parse SR inhibition formula '{formula_str}': {e}")
+        return None
+
+    def _parse_applicable_ionic_strength(self, app_is_str: Optional[str]) -> Tuple[float, float]:
+        """
+        Parse applicable ionic strength from string format.
+        
+        Supports formats:
+        - "<0.1"       → (0.0, 0.1)
+        - "0.1-0.5"    → (0.1, 0.5)
+        - ">1.0"       → (1.0, 999.0)
+        - None/empty   → (0.0, 999.0) [covers all ranges]
+        
+        Returns: (min_is, max_is) tuple
+        """
+        if not app_is_str or isinstance(app_is_str, (int, float)):
+            return 0.0, 999.0
+        
+        app_is_str = str(app_is_str).strip()
+        
+        try:
+            # Handle "<value" format
+            if "<" in app_is_str:
+                val = float(app_is_str.replace("<", "").replace(">", "").strip())
+                return 0.0, val
+            
+            # Handle ">value" format
+            if ">" in app_is_str:
+                val = float(app_is_str.replace("<", "").replace(">", "").strip())
+                return val, 999.0
+            
+            # Handle "min-max" format
+            if "-" in app_is_str:
+                parts = app_is_str.split("-")
+                if len(parts) == 2:
+                    return float(parts[0].strip()), float(parts[1].strip())
+            
+            # Single numeric value — treat as exact match with 0.01 tolerance
+            val = float(app_is_str)
+            return val, val + 0.01
+        
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Could not parse applicableIonicStrength '{app_is_str}': {e}, defaulting to all ranges")
+            return 0.0, 999.0
+
+    def _apply_dynamic_colors(
+        self,
+        results: List[Dict[str, Any]],
+        req: Dict[str, Any],
+        salt_id: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Dynamically applies colors to the entire dataset based on dataset min/max ionic strength,
+        product vs raw material inputs, and calculating BreakpointSR.
+        """
+        if not results:
+            return results
+
+        # 1. Determine min and max Ionic Strength for the entire dataset
+        ionic_strengths = [r.get("ionic_strength", 0.0) for r in results]
+        min_is = min(ionic_strengths) if ionic_strengths else 0.0
+        max_is = max(ionic_strengths) if ionic_strengths else 0.0
+
+        raw_material_data = req.get("raw_material_chemistry")
+        product_data = req.get("product_blend") or req.get("product")
+        user_dosage_ppm = float(req.get("dosage_ppm") or 2.0)
+
+        # 2. Extract active formulas per salt based on input
+        # Dictionary of salt_name -> (BreakpointSR, yellow_lower_cushion, yellow_upper_cushion)
+        salt_breakpoints: Dict[str, Tuple[float, float, float]] = {}
+
+        def process_raw_material(rm_data, dosage):
+            if not rm_data:
+                return
+            
+            # Helper to parse cushion values
+            def _to_float(v, default=5.0):
+                try:
+                    if isinstance(v, str):
+                        v = v.replace("%", "").strip()
+                    return float(v)
+                except (TypeError, ValueError):
+                    return default
+            
+            band_lower_pct = _to_float(rm_data.get("bandLowerCushion"), 5.0)
+            band_upper_pct = _to_float(rm_data.get("bandUpperCushion"), 5.0)
+
+            formulas = rm_data.get("inhibitionFormulas") or []
+            for formula_obj in formulas:
+                salt_to_inhibit = formula_obj.get("salToInhibit", "")
+                if not salt_to_inhibit:
+                    continue
+                
+                # Parse Applicable Ionic Strength range (handles string format: "<0.1", "0.1-0.5", etc.)
+                app_is_str = formula_obj.get("applicableIonicStrength", "")
+                app_is_min, app_is_max = self._parse_applicable_ionic_strength(app_is_str)
+                
+                # Check if dataset ionic strength is within this formula's applicable range
+                if not (min_is >= app_is_min and max_is <= app_is_max):
+                    logger.debug(
+                        f"Dataset IS range [{min_is:.4f}, {max_is:.4f}] outside formula applicable range "
+                        f"[{app_is_min:.4f}, {app_is_max:.4f}] for {salt_to_inhibit} (formula: {app_is_str})"
+                    )
+                    continue
+
+                formula_str = formula_obj.get("formulaForInhibitionPerformance", "")
+                if not formula_str:
+                    logger.warning(f"Missing inhibition formula for salt '{salt_to_inhibit}'")
+                    continue
+                
+                breakpoint_sr = self._solve_for_sr(formula_str, dosage)
+                
+                if breakpoint_sr is None:
+                    logger.warning(f"Failed to solve SR formula for {salt_to_inhibit}: {formula_str}")
+                    continue
+                
+                salt_lower = salt_to_inhibit.lower()
+                existing = salt_breakpoints.get(salt_lower)
+                # USE LOWEST BREAKPOINT for conservative safety as per client rules
+                if not existing or existing[0] > breakpoint_sr:
+                    salt_breakpoints[salt_lower] = (breakpoint_sr, band_lower_pct, band_upper_pct)
+                    logger.info(
+                        f"Assigned BreakpointSR={breakpoint_sr:.4f} for {salt_to_inhibit} at dose={dosage:.2f}ppm "
+                        f"(Ionic Strength: {app_is_str})"
+                    )
+
+        # 3. Handle Product vs Raw Material Input
+        if product_data and isinstance(product_data.get("rawMaterials"), list):
+            for rm_item in product_data.get("rawMaterials", []):
+                rm_chem = rm_item.get("rawMaterialData")
+                if not rm_chem:
+                    continue
+                pct_in_prod = float(rm_item.get("percentageInProduct", 0.0)) / 100.0
+                active_pct = float(rm_chem.get("activePercentage", 100.0)) / 100.0
+                rm_dosage = user_dosage_ppm * pct_in_prod * active_pct
+                process_raw_material(rm_chem, rm_dosage)
+        elif raw_material_data:
+            process_raw_material(raw_material_data, user_dosage_ppm)
+
+        # 4. Apply colors to results
+        for r in results:
+            si_detail = r.get("saturation_indices", {})
+            per_salt_colors = {}
+            for mineral_name, mineral_data in si_detail.items():
+                sr_val = mineral_data.get("SR")
+                if sr_val is None:
+                    sr_val = round(10 ** mineral_data.get("SI", 0.0), 6)
+                
+                matched_bp = None
+                mineral_lower = mineral_name.lower()
+                
+                for s_to_inh, bp_data in salt_breakpoints.items():
+                    # Case-insensitive substring match
+                    if s_to_inh in mineral_lower or mineral_lower in s_to_inh:
+                        matched_bp = bp_data
+                        break
+                
+                if matched_bp:
+                    bp_sr, b_lower, b_upper = matched_bp
+                    green_thresh = bp_sr * (1 - b_lower / 100.0)
+                    red_thresh = bp_sr * (1 + b_upper / 100.0)
+                    
+                    if sr_val < green_thresh:
+                        c = "green"
+                    elif sr_val >= red_thresh:
+                        c = "red"
+                    else:
+                        c = "yellow"
+                else:
+                    # BASE GRAPH COLOR logic: Green if SR < 1, else Red
+                    if sr_val < 1:
+                        c = "green"
+                    else:
+                        c = "red"
+                        
+                per_salt_colors[mineral_name] = c
+
+            r["per_salt_colors"] = per_salt_colors
+            
+            # Set primary color_code (Case-insensitive match for salt_id)
+            target_salt = (salt_id or "").lower()
+            assigned_color = "green"
+            for m_name, m_color in per_salt_colors.items():
+                if m_name.lower() == target_salt:
+                    assigned_color = m_color
+                    break
+            else:
+                # Fallback to the first available salt's color if salt_id not found
+                if per_salt_colors:
+                    assigned_color = next(iter(per_salt_colors.values()))
+            
+            r["color_code"] = assigned_color
+
+        return results
+
+
 
     # ─────────────────────────────────────────────────────────────────────────
     # PUBLIC: run_analysis
@@ -6284,6 +6286,7 @@ class SaturationService:
         # Note: Thresholds and color coding are now calculated dynamically AFTER
         # the entire PHREEQC pipeline finishes so we can determine the dataset's
         # min and max ionic strength.
+        thresholds = {}
         dosage_ppm = float(req.get("dosage_ppm") or 2.0)
 
         # ── 5. Resolve temperatures ───────────────────────────────────────────
@@ -6365,6 +6368,13 @@ class SaturationService:
         # ── 10. Run 2-step PHREEQC pipeline ──────────────────────────────────
         salt_id           = req.get("salt_id")
         salts_of_interest = req.get("salts_of_interest")
+
+        logger.info("Balancing water parameters upfront before grid simulation...")
+        mapped = await self.phreeqc.ion_balance(
+            water_params=mapped,
+            cation_ion=balance_cation,
+            anion_ion=balance_anion
+        )
 
         results, db_used = await self._run_two_step_pipeline(
             mapped_params     = mapped,
