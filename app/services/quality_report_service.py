@@ -270,34 +270,3 @@ class QualityReportService:
 
 
 
-#############################################################################
-class ReportGenerator:
-        def __init__(self, sample_id):
-            self.sample_id = sample_id
-            self.report = None
-
-        def analyze(self):
-            # TODO: Implement analysis pipeline
-            # Step 1: Fetch sample data from database
-            # Step 2: Process raw data
-            # Step 3: Apply scoring models
-            # Step 4: Generate insights and recommendations
-            pass
-
-        def generate_pdf(self):
-            # TODO: Implement PDF generation using ReportLab
-            pass
-
-        def generate_word_doc(self):
-            # TODO: Implement DOCX generation using python-docx
-            pass
-
-        def get_report_html(self):
-            # TODO: Implement HTML report generation
-            pass
-
-        def get_full_report(self):
-            """Get complete analysis report"""
-            if not self.report:
-                self.analyze()
-            return self.report
