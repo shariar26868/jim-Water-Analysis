@@ -4811,6 +4811,13 @@ class SaturationService:
             # SR = 10^SI (always positive — alternative for frontends that can't render negative bars)
             sr_val = round(10 ** si_val, 4) if si_val is not None else None
 
+            r["bar_data"] = {
+                "color_hex": _COLOUR_HEX.get(r["color_code"], "#BDC3C7"),
+                "opacity": opacity,
+                "sr_color": "green" if (sr_val is not None and sr_val < 1) else "red",
+                "sr_color_hex": _COLOUR_HEX.get("green") if (sr_val is not None and sr_val < 1) else _COLOUR_HEX.get("red"),
+            }
+
             bars.append({
                 "x":         r["_grid_CoC"],
                 "y":         si_val,          # SI (can be negative)
@@ -5374,6 +5381,14 @@ class SaturationService:
                 "ccpp":         _merged.get("ccpp")         or {"ccpp_ppm": None, **_NA_CA_ALK},
                 "stiff_davis":  _merged.get("stiff_davis")  or {"index":    None, **_NA_CA_ALK},
                 "larson_skold": _merged.get("larson_skold") or {"index":    None, **_NA_IONS},
+            }
+
+            sr_val = round(10 ** si_val, 4) if si_val is not None else None
+            r["bar_data"] = {
+                "color_hex": _COLOUR_HEX.get(r["color_code"], "#BDC3C7"),
+                "opacity": opacity,
+                "sr_color": "green" if (sr_val is not None and sr_val < 1) else "red",
+                "sr_color_hex": _COLOUR_HEX.get("green") if (sr_val is not None and sr_val < 1) else _COLOUR_HEX.get("red"),
             }
 
             points.append({
@@ -6613,6 +6628,7 @@ class SaturationService:
                 "chart_data":     chart_data,
                 "table_data":     table_data,
                 "summary":        summary,
+                "grid_results":   results,
             }},
         )
 
@@ -6624,6 +6640,7 @@ class SaturationService:
             "thresholds":      thresholds,
             "summary":         summary,
             "available_salts": user_available_salts,
+            "grid_results":    results,
         }
 
     # ─────────────────────────────────────────────────────────────────────────
