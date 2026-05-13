@@ -1275,7 +1275,6 @@ class PHREEQCService:
         lines.append("END")
 
         pqi_content = "\n".join(lines)
-        logger.info(f"[DEBUG] Step5 PQI:\n{pqi_content}")
         return pqi_content
 
 

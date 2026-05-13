@@ -4580,32 +4580,37 @@ class SaturationService:
 
                 desc = phreeqc_result.get("description_of_solution", {})
 
-                # ── DO Level from PHREEQC distribution_of_species ─────────────
-                # Formula: DO_ppm = O2_molality × mass_of_water_kg × 32 × 1000
-                # Default = 6.0 ppm if PHREEQC data not available
+                # ── DO Level — standard DO saturation formula ─────────────────
+                # Uses the standard polynomial DO saturation formula (APHA/AWWA):
+                #   DO_sat(T) = 14.62 - 0.3898×T + 0.006969×T² - 0.00005896×T³
+                # This is valid across the full temperature range (0–65°C).
+                #
+                # If wet bulb temp is available, apply evaporative correction:
+                #   DO = DO_sat - 0.05 × (T_water - T_wetbulb)
+                #
+                # NOTE: PHREEQC O2 molality is NOT used because pe=4.0 gives
+                # near-zero O2 (reducing conditions) — not realistic for cooling water.
                 dist_species = phreeqc_result.get("distribution_of_species", {})
                 do_ppm = 6.0  # default
                 try:
-                    # O2 species key can be "O2" or "O2(aq)" in PHREEQC output
-                    o2_entry = (
-                        dist_species.get("O2")
-                        or dist_species.get("O2(aq)")
-                        or dist_species.get("O2(g)")
-                    )
-                    if o2_entry and isinstance(o2_entry, dict):
-                        o2_molality = float(o2_entry.get("molality", 0.0))
-                        mass_of_water_kg = float(desc.get("mass_of_water_kg") or 1.0)
-                        if o2_molality > 0:
-                            # Step 1: moles O2 = molality × mass_of_water
-                            moles_o2 = o2_molality * mass_of_water_kg
-                            # Step 2: grams O2 = moles × 32 g/mol
-                            grams_o2 = moles_o2 * 32.0
-                            # Step 3: mg/kg = g/kg × 1000
-                            mg_per_kg = grams_o2 * 1000.0
-                            # Step 4: mg/kg ≈ ppm for dilute water
-                            do_ppm = round(mg_per_kg, 4)
+                    tw_c = hot_temp_c  # evaluation temperature in °C
+                    # Standard DO saturation at temperature T (APHA polynomial)
+                    do_sat = (14.62
+                              - 0.3898 * tw_c
+                              + 0.006969 * tw_c ** 2
+                              - 0.00005896 * tw_c ** 3)
+                    do_sat = max(do_sat, 0.5)  # physical minimum ~0.5 ppm at very high temps
+
+                    # Apply wet-bulb evaporative correction if available
+                    wb_raw = mapped_params.get("_wet_bulb_temp_c")
+                    if wb_raw is not None:
+                        twb_c = float(wb_raw)
+                        correction = 0.05 * (tw_c - twb_c)
+                        do_ppm = round(max(0.5, do_sat - correction), 4)
+                    else:
+                        do_ppm = round(do_sat, 4)
                 except Exception:
-                    do_ppm = 6.0  # fallback to default
+                    do_ppm = 6.0
 
                 results.append({
                     "_grid_CoC":               coc,
@@ -6422,7 +6427,15 @@ class SaturationService:
         )
 
         results, db_used = await self._run_two_step_pipeline(
-            mapped_params     = mapped,
+            mapped_params     = {
+                **mapped,
+                # Pass wet bulb temp for per-CoC DO calculation
+                "_wet_bulb_temp_c": (
+                    round((float(asset_info.get("wetBulbTempF")) - 32) * 5 / 9, 2)
+                    if asset_info.get("wetBulbTempF") is not None
+                    else None
+                ),
+            },
             coc_list          = coc_list,
             cold_temp_c       = cold_temp_c,
             temp_list_c       = temp_list_c,
