@@ -4580,18 +4580,46 @@ class SaturationService:
 
                 desc = phreeqc_result.get("description_of_solution", {})
 
+                # ── DO Level from PHREEQC distribution_of_species ─────────────
+                # Formula: DO_ppm = O2_molality × mass_of_water_kg × 32 × 1000
+                # Default = 6.0 ppm if PHREEQC data not available
+                dist_species = phreeqc_result.get("distribution_of_species", {})
+                do_ppm = 6.0  # default
+                try:
+                    # O2 species key can be "O2" or "O2(aq)" in PHREEQC output
+                    o2_entry = (
+                        dist_species.get("O2")
+                        or dist_species.get("O2(aq)")
+                        or dist_species.get("O2(g)")
+                    )
+                    if o2_entry and isinstance(o2_entry, dict):
+                        o2_molality = float(o2_entry.get("molality", 0.0))
+                        mass_of_water_kg = float(desc.get("mass_of_water_kg") or 1.0)
+                        if o2_molality > 0:
+                            # Step 1: moles O2 = molality × mass_of_water
+                            moles_o2 = o2_molality * mass_of_water_kg
+                            # Step 2: grams O2 = moles × 32 g/mol
+                            grams_o2 = moles_o2 * 32.0
+                            # Step 3: mg/kg = g/kg × 1000
+                            mg_per_kg = grams_o2 * 1000.0
+                            # Step 4: mg/kg ≈ ppm for dilute water
+                            do_ppm = round(mg_per_kg, 4)
+                except Exception:
+                    do_ppm = 6.0  # fallback to default
+
                 results.append({
                     "_grid_CoC":               coc,
-                    "_grid_temp":              round(hot_temp_raw, 2),  # user's original input value (F or C)
-                    "_grid_temp_c":            hot_temp_c,             # Celsius — for internal calcs only
+                    "_grid_temp":              round(hot_temp_raw, 2),
+                    "_grid_temp_c":            hot_temp_c,
                     "_grid_pH":                natural_ph,
                     "_cold_temp_c":            cold_temp_c,
                     "_natural_ph_at_cold":     natural_ph,
                     "saturation_indices":      si_detail,
                     "description_of_solution": desc,
-                    "distribution_of_species": phreeqc_result.get("distribution_of_species", {}),
-                    "color_code":              "green",  # Placeholder, assigned in _apply_dynamic_colors
-                    "per_salt_colors":         {},       # Placeholder, assigned in _apply_dynamic_colors
+                    "distribution_of_species": dist_species,
+                    "dissolved_oxygen_ppm":    do_ppm,   # per-CoC DO value
+                    "color_code":              "green",
+                    "per_salt_colors":         {},
                     "ionic_strength":          phreeqc_result.get("ionic_strength", 0.0),
                     "charge_balance_error_pct": phreeqc_result.get("charge_balance_error_pct", 0.0),
                     "electrical_balance":      phreeqc_result.get("electrical_balance", 0.0),
@@ -5912,15 +5940,16 @@ class SaturationService:
             "wet_bulb_temp_f":        wet_bulb_f,
             "skin_temp_f":            skin_temp_f,
             "drift_percent":          drift_pct,
+            "drift_gpm":              round(recirc_gpm * drift_pct / 100.0, 2) if recirc_gpm > 0 else None,
             "evaporation_factor_pct": evap_factor_pct,
             "cooling_tons_input":     cooling_tons_in if cooling_tons_in > 0 else None,
             "range": {
                 "range_f": range_f,
-                "note":    "hot_water_temp_f − cold_water_temp_f" if (hot_temp_f and cold_temp_f) else
-                           "from deltaTemperature" if delta_f else "Insufficient temperature data",
             },
             "approach": {
                 "approach_f": approach_f,
+                # Temperature difference conversion: ΔF × 5/9 = ΔC (no -32 offset)
+                "approach_c": round(approach_f * 5 / 9, 2) if approach_f is not None else None,
                 **({"source": "approachToWB field"} if approach_to_wb > 0 and wet_bulb_f is None else {}),
                 **({"note": "Wet bulb temperature not provided"} if approach_f is None else {}),
             },
@@ -5946,8 +5975,9 @@ class SaturationService:
                 "do_ppm":          do_ppm_sys,
                 "water_temp_c":    tw_c,
                 "wet_bulb_temp_c": twb_c,
-                **({"note": "wet bulb estimated (5°C below water temp)"} if wet_bulb_f is None and skin_temp_f is None and ref_temp_f is not None else {}),
-                **({"note": "Default fallback (temperatures not provided)"} if ref_temp_f is None else {}),
+                "note":            "Per-CoC DO values are in grid_results[].dissolved_oxygen_ppm (calculated from PHREEQC O2 molality). This is a system-level estimate only.",
+                **({"estimation": "wet bulb estimated (5°C below water temp)"} if wet_bulb_f is None and skin_temp_f is None and ref_temp_f is not None else {}),
+                **({"estimation": "Default fallback (temperatures not provided)"} if ref_temp_f is None else {}),
             },
         }
 
@@ -6535,6 +6565,42 @@ class SaturationService:
             "raw_material_chemistry":  req.get("raw_material_chemistry"),
             "asset_info":              asset_info,
             "cooling_tower_analysis":  cooling_tower_analysis,
+            # ── Convenience object: all 3 sections in one place for frontend ──
+            "asset_summary": {
+                # 1. Asset Information
+                "asset_information": {
+                    "name":             asset_info.get("name"),
+                    "type":             asset_info.get("type"),
+                    "tower_type":       asset_info.get("towerType"),
+                    "system_volume":    asset_info.get("systemVolume"),
+                    "recirculation_rate_gpm": asset_info.get("recirculationRate"),
+                    "supply_temperature":     asset_info.get("supplyTemperature"),
+                    "supply_temperature_unit":asset_info.get("supplyTemperatureType", "°F"),
+                    "return_temperature":     asset_info.get("returnTemperature"),
+                    "return_temperature_unit":asset_info.get("returnTemperatureType", "°F"),
+                    "fill_type":        asset_info.get("fillType"),
+                    "draft_type":       asset_info.get("draftType"),
+                },
+                # 2. Materials
+                "materials": {
+                    "metallurgy": asset_info.get("systemMetallurgy") or [],
+                    "system_materials": asset_info.get("systemMaterials") or [],
+                },
+                # 3. Cooling Tower Analysis (system-level only, DO removed — see grid_results[].dissolved_oxygen_ppm)
+                "cooling_tower_analysis": {
+                    **{
+                        k: v for k, v in (
+                            cooling_tower_analysis.get("system") or {}
+                        ).items()
+                        if k != "dissolved_oxygen"   # DO is per-CoC → in grid_results[].dissolved_oxygen_ppm
+                    },
+                    # Keep wet bulb temp here for display in Cooling Tower Analysis section
+                    "wet_bulb_temp_f":  (cooling_tower_analysis.get("system") or {}).get("wet_bulb_temp_f"),
+                    "wet_bulb_temp_c":  round(((cooling_tower_analysis.get("system") or {}).get("wet_bulb_temp_f") - 32) * 5 / 9, 2)
+                                        if (cooling_tower_analysis.get("system") or {}).get("wet_bulb_temp_f") is not None
+                                        else (cooling_tower_analysis.get("system") or {}).get("dissolved_oxygen", {}).get("wet_bulb_temp_c"),
+                } if isinstance(cooling_tower_analysis, dict) else None,
+            },
             "table_data":              table_data,
             "created_at":              datetime.now(timezone.utc).isoformat(),
         }

@@ -745,6 +745,10 @@ class PHREEQCService:
                 m = re.search(r"Ionic strength\s*\(mol/kgw\)\s*=\s*([\d.eE+\-]+)", line)
                 if m:
                     desc["ionic_strength_desc"] = float(m.group(1))
+                # Mass of water
+                m = re.search(r"Mass of water\s*\(kg\)\s*=\s*([\d.eE+\-]+)", line)
+                if m:
+                    desc["mass_of_water_kg"] = float(m.group(1))
         if desc:
             parsed["description_of_solution"] = desc
             # Also set ionic_strength from description if not already set
