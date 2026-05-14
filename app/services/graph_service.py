@@ -196,18 +196,28 @@ class GraphService:
             plt.close(fig)
 
             graph_url = await self._upload_to_s3(buffer, "parameter_comparison")
-            logger.info(f"✅ Graph created: {graph_url}")
+            if graph_url:
+                logger.info(f"✅ Graph created: {graph_url}")
+            else:
+                logger.warning("⚠️ Graph generated but S3 upload skipped — graph_url will be null")
 
             return {
-                "graph_url":    graph_url,
-                "graph_type":   "parameter_comparison_bar",
+                "graph_url":     graph_url,        # None if S3 unavailable
+                "graph_type":    "parameter_comparison_bar",
                 "color_mapping": status_mapping,
-                "created_at":   datetime.utcnow(),
+                "created_at":    datetime.utcnow(),
             }
 
         except Exception as e:
             logger.exception("❌ Graph creation failed")
-            raise Exception(f"Graph creation failed: {str(e)}")
+            # Return a safe fallback instead of raising — prevents 500 on the analysis endpoint
+            return {
+                "graph_url":     None,
+                "graph_type":    "parameter_comparison_bar",
+                "color_mapping": {},
+                "error":         str(e),
+                "created_at":    datetime.utcnow(),
+            }
     
     async def modify_with_prompt(
         self,
@@ -549,32 +559,41 @@ Examples:
     # =====================================================
     # S3 UPLOAD
     # =====================================================
-    async def _upload_to_s3(self, buffer: BytesIO, filename_prefix: str) -> str:
-        """Upload to S3 and return pre-signed URL (7 days)"""
+    async def _upload_to_s3(self, buffer: BytesIO, filename_prefix: str) -> Optional[str]:
+        """
+        Upload graph to S3 and return a pre-signed URL (7 days).
+        Returns None — does NOT raise — if S3 is unavailable or credentials are invalid.
+        This allows the analysis pipeline to continue even without a working S3 bucket.
+        """
+        # Guard: skip entirely if bucket or credentials are not configured
+        if not self.bucket_name:
+            logger.warning("⚠️ S3 bucket not configured (AWS_S3_BUCKET missing) — skipping upload")
+            return None
+
         try:
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             key = f"graphs/{filename_prefix}_{timestamp}.png"
-            
+
             self.s3_client.upload_fileobj(
                 buffer,
                 self.bucket_name,
                 key,
                 ExtraArgs={'ContentType': 'image/png'}
             )
-            
+
             logger.info(f"✅ S3: {key}")
-            
+
             url = self.s3_client.generate_presigned_url(
                 'get_object',
                 Params={'Bucket': self.bucket_name, 'Key': key},
                 ExpiresIn=604800  # 7 days
             )
-            
+
             return url
-            
+
         except Exception as e:
-            logger.error(f"❌ S3 failed: {e}")
-            raise Exception(f"S3 upload failed: {str(e)}")
+            logger.error(f"❌ S3 upload failed (graph_url will be null): {e}")
+            return None  # Graceful degradation — caller handles None
     
     # =====================================================
     # DEFAULT TEMPLATE
