@@ -6347,45 +6347,86 @@ class SaturationService:
 
         return {"system": system, "per_coc": per_coc}
     def _solve_for_sr(self, formula_str: str, dosage_ppm: float) -> Optional[float]:
+        """
+        Solve inhibition formula for SR given a dosage value.
+
+        Handles client formula formats like:
+          Dose = (0.0001 × SR(Calcite)²) + (SR(Calcite) × 0.0376) + 0.2175
+          y = 0.0001*x^2 + 0.0376*x + 0.2175
+          Dose = A*SR^2 + B*SR + C
+
+        Returns the positive (higher) root SR value, or None if parse fails.
+        """
         if not formula_str:
             return None
         try:
             import re
             import math
-            # Normalize formula: remove 'y =' or 'Dose =' if present, replace x/X with SR
+
             f = formula_str.lower().strip()
+
+            # ── Normalize left-hand side ─────────────────────────────────────
             f = re.sub(r'^(y|dose|d)\s*=\s*', '', f)
-            f = f.replace("x", "sr").replace("si", "sr").replace("×", "*")
-            
-            # 1. Try quadratic: A * SR^2 + B * SR + C
+
+            # ── Normalize SR variable: "SR(Calcite)" → "sr" ─────────────────
+            f = re.sub(r'\bsr\s*\([^)]*\)', 'sr', f)
+
+            # ── Normalize operators (unicode × ² ³) ─────────────────────────
+            f = f.replace('\u00d7', '*').replace('\u00b2', '^2').replace('\u00b3', '^3')
+
+            # ── 'x' as multiply operator between terms → '*' ─────────────────
+            # e.g. "0.0001 x SR^2" or "SR(Calcite) x 0.0376"
+            # Must be done BEFORE replacing standalone x → sr
+            f = re.sub(r'(?<=[\d\w\)]) x (?=[\d\w\(sr])', ' * ', f)
+
+            # standalone 'x' (variable) and 'si' → 'sr'
+            f = re.sub(r'\bx\b', 'sr', f)
+            f = re.sub(r'\bsi\b', 'sr', f)
+
+            # ── Remove surrounding parentheses ───────────────────────────────
+            f = f.replace('(', ' ').replace(')', ' ')
+
+            # ── Reorder "sr * coeff" → "coeff * sr" for regex consistency ───
+            # Client writes: SR(Calcite) x 0.0376 which becomes: sr * 0.0376
+            # Regex expects the coefficient on the LEFT: 0.0376 * sr
+            f = re.sub(r'\bsr\s*\*\s*([\d.]+)', r'\1 * sr', f)
+
+            f = re.sub(r'\s+', ' ', f).strip()
+
+            # ── 1. Try quadratic: A * sr^2 + B * sr + C ─────────────────────
+            # Pattern supports: "0.0001 * sr^2 + 0.0376 * sr + 0.2175"
             mq = re.search(
-                r"([\d.]+)\s*\*?\s*sr\s*\^?\s*2\s*([+\-])\s*([\d.]+)\s*\*?\s*sr\s*([+\-])\s*([\d.]+)",
+                r'([\d.]+)\s*\*?\s*sr\s*\^?\s*2\s*([+\-])\s*([\d.]+)\s*\*?\s*sr\s*([+\-])\s*([\d.]+)',
                 f
             )
             if mq:
                 a = float(mq.group(1))
                 b = float(mq.group(3)) * (1 if mq.group(2) == '+' else -1)
                 c = float(mq.group(5)) * (1 if mq.group(4) == '+' else -1)
-                
+
                 # Equation: a*sr^2 + b*sr + (c - dosage_ppm) = 0
                 discriminant = b**2 - 4 * a * (c - dosage_ppm)
                 if discriminant >= 0:
                     sr1 = (-b + math.sqrt(discriminant)) / (2 * a)
                     sr2 = (-b - math.sqrt(discriminant)) / (2 * a)
-                    # We usually want the positive/higher root for SR
-                    return max(sr1, sr2)
+                    # Return the positive/higher root (physically meaningful SR)
+                    positive_roots = [r for r in [sr1, sr2] if r > 0]
+                    if positive_roots:
+                        return max(positive_roots)
+                logger.warning(f"Negative discriminant in SR formula: {formula_str}")
                 return None
 
-            # 2. Try linear: A * SR + B
-            ml = re.search(r"([\d.]+)\s*\*?\s*sr(?:\s*([+\-])\s*([\d.]+))?", f)
+            # ── 2. Try linear: A * sr + B ────────────────────────────────────
+            ml = re.search(r'([\d.]+)\s*\*?\s*sr(?:\s*([+\-])\s*([\d.]+))?', f)
             if ml:
                 a = float(ml.group(1))
                 b = 0.0
                 if ml.group(3):
                     b = float(ml.group(3)) * (1 if ml.group(2) == '+' else -1)
-                
                 if a != 0:
                     return (dosage_ppm - b) / a
+
+            logger.warning(f"Could not match any formula pattern in: '{formula_str}' (normalized: '{f}')")
 
         except Exception as e:
             logger.warning(f"Could not parse SR inhibition formula '{formula_str}': {e}")
