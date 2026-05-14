@@ -4381,6 +4381,143 @@ def _to_celsius(value: float, unit: str) -> float:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CYCLED WATER PARAMETERS BUILDER
+# Builds the concentrated water chemistry table for a specific CoC × Temp point.
+# This is shown in the frontend when a user clicks a bar on the 3D graph.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_cycled_water_params(
+    mapped_params: Dict[str, Any],
+    coc: float,
+    temp_display: float,
+    temp_c: float,
+    natural_ph: float,
+    desc: Dict[str, Any],
+    do_ppm: float,
+) -> Dict[str, Any]:
+    """
+    Build the "Cycled Water Parameters" table for a specific grid point.
+
+    Shows the concentrated water chemistry at CoC × Temp:
+      - All ion concentrations = base_water × CoC
+      - pH = natural pH from CO2 equilibration (Step 1)
+      - Temperature = evaluation temperature
+
+    Ion display order matches PHREEQC SOLUTION block convention.
+    """
+    def _get_conc(ion: str) -> Optional[float]:
+        """Get base value from mapped_params and multiply by CoC."""
+        v = mapped_params.get(ion)
+        if v is None:
+            return None
+        base = float(v.get("value", 0) if isinstance(v, dict) else v)
+        if base <= 0:
+            return None
+        return round(base * coc, 4)
+
+    def _get_unit(ion: str) -> str:
+        v = mapped_params.get(ion)
+        if isinstance(v, dict):
+            return v.get("unit", "mg/L") or "mg/L"
+        return "mg/L"
+
+    # Build parameter rows in display order
+    params: Dict[str, Any] = {}
+
+    # Temperature (not multiplied by CoC)
+    params["Temperature"] = {
+        "value": round(temp_display, 1),
+        "unit": "°F",
+        "value_c": round(temp_c, 2),
+        "unit_c": "°C",
+        "label": "Temperature",
+    }
+
+    # pH (natural pH from CO2 equilibration — not multiplied by CoC)
+    params["pH"] = {
+        "value": round(natural_ph, 3),
+        "unit": "",
+        "label": "pH",
+    }
+
+    # Ion map: internal key → display label, PHREEQC name, as-unit
+    ion_display = [
+        ("Ca",   "Calcium",      "Ca",          "Ca"),
+        ("Mg",   "Magnesium",    "Mg",          "Mg"),
+        ("Na",   "Sodium",       "Na",          "Na"),
+        ("K",    "Potassium",    "K",           "K"),
+        ("HCO3", "Alkalinity",   "Alkalinity",  "CaCO3"),
+        ("Cl",   "Chloride",     "Cl",          "Cl"),
+        ("SO4",  "Sulfate",      "S(6)",        "SO4"),
+        ("SiO2", "Silica",       "Si",          "SiO2"),
+        ("Fe",   "Iron",         "Fe(2)",       "Fe"),
+        ("PO4",  "Phosphate",    "P",           "PO4"),
+        ("Ba",   "Barium",       "Ba",          "Ba"),
+        ("Sr",   "Strontium",    "Sr",          "Sr"),
+        ("Mn",   "Manganese",    "Mn",          "Mn"),
+        ("F",    "Fluoride",     "F",           "F"),
+    ]
+
+    for ion_key, label, phreeqc_name, as_unit in ion_display:
+        conc = _get_conc(ion_key)
+        if conc is not None:
+            unit = _get_unit(ion_key)
+            params[ion_key] = {
+                "value":        conc,
+                "unit":         unit,
+                "as":           as_unit,
+                "phreeqc_name": phreeqc_name,
+                "label":        label,
+            }
+
+    # Dissolved Oxygen
+    params["DO"] = {
+        "value": do_ppm,
+        "unit":  "ppm",
+        "label": "Dissolved Oxygen",
+    }
+
+    # Solution properties from PHREEQC description_of_solution
+    solution_props = {
+        "specific_conductance": {
+            "value": desc.get("specific_conductance"),
+            "unit":  "µS/cm",
+            "label": "Specific Conductance",
+        },
+        "density": {
+            "value": desc.get("density"),
+            "unit":  "g/cm³",
+            "label": "Density",
+        },
+        "activity_of_water": {
+            "value": desc.get("activity_of_water"),
+            "unit":  "",
+            "label": "Activity of Water",
+        },
+        "ionic_strength": {
+            "value": desc.get("ionic_strength_desc"),
+            "unit":  "mol/kgw",
+            "label": "Ionic Strength",
+        },
+        "mass_of_water_kg": {
+            "value": desc.get("mass_of_water_kg"),
+            "unit":  "kg",
+            "label": "Mass of Water",
+        },
+    }
+
+    return {
+        "coc":             coc,
+        "temperature":     round(temp_display, 1),
+        "temperature_c":   round(temp_c, 2),
+        "pH":              round(natural_ph, 3),
+        "units":           "mg/L",
+        "parameters":      params,
+        "solution_properties": {k: v for k, v in solution_props.items() if v["value"] is not None},
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN SERVICE
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -4630,6 +4767,13 @@ class SaturationService:
                     "electrical_balance":      phreeqc_result.get("electrical_balance", 0.0),
                     "specific_conductance":    desc.get("specific_conductance"),
                     "density":                 desc.get("density"),
+                    # ── Cycled Water Parameters (for frontend table on bar click) ──
+                    # Shows the concentrated water chemistry at this CoC × Temp point.
+                    # Values = base_water × CoC (except pH and Temperature).
+                    "cycled_water_parameters": _build_cycled_water_params(
+                        mapped_params, coc, hot_temp_raw, hot_temp_c, natural_ph,
+                        desc, do_ppm
+                    ),
                 })
 
         logger.info(f"Pipeline complete: {len(results)} grid points ({len(temp_list_c)} temps × {len(coc_list)} CoC)")
@@ -5360,6 +5504,40 @@ class SaturationService:
                     return v.get("SI") if isinstance(v, dict) else float(v)
             return None
 
+        def _build_corrosion_for_point(pt: Dict) -> Dict:
+            """
+            Return a merged corrosion dict for one grid point.
+            Priority: r["corrosion"] (from _enrich_grid_points, most detailed)
+            Fallback:  r["calculations"]["*_corrosion"] (from _add_calculations_to_results)
+            Covers: mild_steel, copper, admiralty_brass
+            """
+            corr = dict(pt.get("corrosion") or {})
+            calcs = pt.get("calculations") or {}
+
+            def _fmt(ms: Dict, risk_label: str = None) -> Dict:
+                return {
+                    "cr_mpy":                   ms.get("cr_mpy"),
+                    "cr_base_mpy":              ms.get("cr_base_mpy"),
+                    "total_inhibition_percent": ms.get("total_inhibition_percent"),
+                    "rating":                   ms.get("rating"),
+                    "risk_level":               risk_label or ms.get("rating"),
+                    "do_ppm_used":              ms.get("do_ppm_used") or (ms.get("components") or {}).get("do_ppm"),
+                    "components":               ms.get("components"),
+                    "note":                     ms.get("note"),
+                    "source":                   "calculations",
+                }
+
+            if "mild_steel" not in corr and "mild_steel_corrosion" in calcs:
+                corr["mild_steel"] = _fmt(calcs["mild_steel_corrosion"])
+
+            if "copper" not in corr and "copper_corrosion" in calcs:
+                corr["copper"] = _fmt(calcs["copper_corrosion"])
+
+            if "admiralty_brass" not in corr and "admiralty_brass_corrosion" in calcs:
+                corr["admiralty_brass"] = _fmt(calcs["admiralty_brass_corrosion"])
+
+            return corr
+
         si_vals = []
         for r in results:
             val = _get_si(r["saturation_indices"], salt_id)
@@ -5439,8 +5617,21 @@ class SaturationService:
                 "indices":       merged_indices,
                 "water_balance": r.get("water_balance", {}),
                 "chemical":      r.get("chemical", {}),
-                "corrosion":     r.get("corrosion", {}),
-                "description_of_solution": desc,
+                # ── Corrosion: merge _enrich_grid_points data with _add_calculations fallback ──
+                "corrosion":     _build_corrosion_for_point(r),
+                # ── Description of Solution: PHREEQC values + root-level fallbacks ──
+                "description_of_solution": {
+                    "ph":                   desc.get("pH") or r.get("_grid_pH"),
+                    "temperature_c":        desc.get("temperature_C") or r.get("_grid_temp_c"),
+                    "specific_conductance": desc.get("specific_conductance") or r.get("specific_conductance"),
+                    "density":              desc.get("density") or r.get("density"),
+                    "activity_of_water":    desc.get("activity_of_water"),
+                    "ionic_strength":       desc.get("ionic_strength_desc") or r.get("ionic_strength"),
+                    "dissolved_oxygen_ppm": r.get("dissolved_oxygen_ppm"),
+                    "charge_balance_error_pct": r.get("charge_balance_error_pct"),
+                    "electrical_balance":   r.get("electrical_balance"),
+                    "mass_of_water_kg":     desc.get("mass_of_water_kg"),
+                },
                 "distribution_of_species": r.get("distribution_of_species", {}),
                 "electrical_balance":      r.get("electrical_balance", 0.0),
             })
@@ -5629,7 +5820,32 @@ class SaturationService:
             })
 
             # ── 6. Corrosion Rates ────────────────────────────────────────────
-            corr = r.get("corrosion") or {}
+            # Merge r["corrosion"] (from _enrich_grid_points) with
+            # r["calculations"] fallback (from _add_calculations_to_results).
+            # Covers: mild_steel, copper, admiralty_brass
+            corr = dict(r.get("corrosion") or {})
+            _calc_corr = r.get("calculations") or {}
+
+            _metal_calc_map = {
+                "mild_steel":      "mild_steel_corrosion",
+                "copper":          "copper_corrosion",
+                "admiralty_brass": "admiralty_brass_corrosion",
+            }
+            for _mk, _ck in _metal_calc_map.items():
+                if _mk not in corr and _ck in _calc_corr:
+                    ms = _calc_corr[_ck]
+                    corr[_mk] = {
+                        "cr_mpy":                   ms.get("cr_mpy"),
+                        "cr_base_mpy":              ms.get("cr_base_mpy"),
+                        "total_inhibition_percent": ms.get("total_inhibition_percent"),
+                        "rating":                   ms.get("rating"),
+                        "risk_level":               ms.get("rating"),
+                        "do_ppm_used":              ms.get("do_ppm_used") or (ms.get("components") or {}).get("do_ppm"),
+                        "components":               ms.get("components"),
+                        "note":                     ms.get("note"),
+                        "source":                   "calculations",
+                    }
+
             _corr_rows = []
             metal_labels = {
                 "mild_steel":      "Mild Steel",
@@ -5640,11 +5856,17 @@ class SaturationService:
                 if metal_key in corr:
                     m = corr[metal_key]
                     _corr_rows.append({
-                        "metal":        metal_label,
-                        "metal_key":    metal_key,
-                        "cr_mpy":       m.get("cr_mpy"),
-                        "risk_level":   m.get("risk_level") or m.get("risk"),
-                        "do_ppm_used":  m.get("do_ppm_used"),
+                        "metal":                    metal_label,
+                        "metal_key":                metal_key,
+                        "cr_mpy":                   m.get("cr_mpy"),
+                        "cr_base_mpy":              m.get("cr_base_mpy"),
+                        "total_inhibition_percent": m.get("total_inhibition_percent"),
+                        "rating":                   m.get("rating"),
+                        "risk_level":               m.get("risk_level") or m.get("rating") or m.get("risk"),
+                        "do_ppm_used":              m.get("do_ppm_used"),
+                        "components":               m.get("components"),
+                        "note":                     m.get("note"),
+                        "source":                   m.get("source"),
                     })
             corrosion_rates.append({
                 "coc":         coc,
@@ -5654,16 +5876,22 @@ class SaturationService:
             })
 
             # ── 7. Description of Solution ────────────────────────────────────
+            # desc = r["description_of_solution"] (from PHREEQC parser)
+            # Fallback to root-level grid point fields when desc is empty/missing
             description_of_solution.append({
                 "coc":                  coc,
                 "temperature":          temp,
                 "temp_unit":            temp_suffix,
-                "ph":                   desc.get("pH"),
-                "specific_conductance": desc.get("specific_conductance"),
-                "density":              desc.get("density"),
+                "temperature_c":        desc.get("temperature_C") or r.get("_grid_temp_c"),
+                "ph":                   desc.get("pH") or ph,
+                "specific_conductance": desc.get("specific_conductance") or r.get("specific_conductance"),
+                "density":              desc.get("density") or r.get("density"),
                 "activity_of_water":    desc.get("activity_of_water"),
-                "ionic_strength":       desc.get("ionic_strength_desc"),
-                "temperature_c":        desc.get("temperature_C"),
+                "ionic_strength":       desc.get("ionic_strength_desc") or r.get("ionic_strength"),
+                "dissolved_oxygen_ppm": r.get("dissolved_oxygen_ppm"),
+                "charge_balance_error_pct": r.get("charge_balance_error_pct"),
+                "electrical_balance":   r.get("electrical_balance"),
+                "mass_of_water_kg":     desc.get("mass_of_water_kg"),
             })
 
             # ── 8. Distribution of Species ────────────────────────────────────
@@ -5821,14 +6049,79 @@ class SaturationService:
                         item["mineral_name"]: item["si_value"]
                         for item in phreeqc_output["saturation_indices"]
                     }
-                    calcs["mild_steel_corrosion"] = await calc.calculate_mild_steel_corrosion(
-                        params, sat_indices_dict, do_ppm=5.0,
-                        temp_c=r.get("_grid_temp_c", r["_grid_temp"])  # use Celsius
-                    )
+                    # Temperature-based DO estimate (Henry's law for open cooling water)
+                    # Same formula used by _enrich_grid_points — no hardcoded do_ppm
+                    _tc = r.get("_grid_temp_c", r["_grid_temp"])
+                    do_ppm_calc = max(0.0, round(
+                        14.62 - 0.3898 * _tc + 0.006969 * _tc**2 - 0.00005896 * _tc**3, 2
+                    ))
+                    _ph = float(r.get("_grid_pH") or grid_ph)
+
+                    # ── Mild Steel ────────────────────────────────────────────
+                    try:
+                        ms_result = await calc.calculate_mild_steel_corrosion(
+                            params, sat_indices_dict, do_ppm=do_ppm_calc, temp_c=_tc
+                        )
+                        calcs["mild_steel_corrosion"] = {**ms_result, "do_ppm_used": do_ppm_calc}
+                    except Exception:
+                        pass
+
+                    # ── Copper ────────────────────────────────────────────────
+                    try:
+                        cu_result = await calc.calculate_copper_corrosion(
+                            params, sat_indices_dict, do_ppm=do_ppm_calc, temp_c=_tc, pH=_ph
+                        )
+                        calcs["copper_corrosion"] = {**cu_result, "do_ppm_used": do_ppm_calc}
+                    except Exception:
+                        pass
+
+                    # ── Admiralty Brass (Copper × 0.85 factor) ────────────────
+                    try:
+                        ab_result = await calc.calculate_copper_corrosion(
+                            params, sat_indices_dict, do_ppm=do_ppm_calc, temp_c=_tc, pH=_ph
+                        )
+                        calcs["admiralty_brass_corrosion"] = {
+                            **ab_result,
+                            "cr_mpy":      round(ab_result["cr_mpy"] * 0.85, 2),
+                            "cr_base_mpy": round(ab_result["cr_base_mpy"] * 0.85, 2),
+                            "do_ppm_used": do_ppm_calc,
+                            "note":        "Admiralty Brass rate = Copper × 0.85",
+                        }
+                    except Exception:
+                        pass
+
                 except Exception:
                     pass
 
                 r["calculations"] = calcs
+
+                # ── Build standalone corrosion_rate object on grid point ────────
+                # Clean, minimal object — only essential display fields.
+                # grid_results[i].corrosion_rate.mild_steel / .copper / .admiralty_brass
+                _existing_corr = r.get("corrosion") or {}
+
+                def _pick(enrich_key: str, calc_key: str) -> Optional[Dict]:
+                    """Return clean corrosion data for one metal — essential fields only."""
+                    src = _existing_corr.get(enrich_key) or calcs.get(calc_key)
+                    if not src:
+                        return None
+                    out = {
+                        "cr_mpy":      src.get("cr_mpy"),
+                        "cr_base_mpy": src.get("cr_base_mpy"),
+                        "rating":      src.get("rating"),
+                    }
+                    # Only include note if it has a value (Admiralty Brass label)
+                    if src.get("note"):
+                        out["note"] = src["note"]
+                    return out
+
+                r["corrosion_rate"] = {
+                    "do_ppm":          do_ppm_calc,
+                    "temp_c":          _tc,
+                    "mild_steel":      _pick("mild_steel",      "mild_steel_corrosion"),
+                    "copper":          _pick("copper",          "copper_corrosion"),
+                    "admiralty_brass": _pick("admiralty_brass", "admiralty_brass_corrosion"),
+                }
 
             except Exception as e:
                 logger.warning(f"Calculations failed for CoC={r.get('_grid_CoC')}: {e}")
