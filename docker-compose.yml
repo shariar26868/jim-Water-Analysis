@@ -51,7 +51,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       # Optional host path for PHREEQC database (set PHREEQC_DB_HOST_PATH in .env on VPS)
-      - ${PHREEQC_DB_HOST_PATH:-./phreeqc-3.8.6-17100/database}:/phreeqc-3.8.6-17100/database:ro
+      - /phreeqc-3.8.6-17100/database:/phreeqc-3.8.6-17100/database:ro
     
     env_file:
       - .env
