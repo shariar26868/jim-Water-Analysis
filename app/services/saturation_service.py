@@ -6526,10 +6526,14 @@ class SaturationService:
                 app_is_str = formula_obj.get("applicableIonicStrength", "")
                 app_is_min, app_is_max = self._parse_applicable_ionic_strength(app_is_str)
                 
-                # Check if dataset ionic strength is within this formula's applicable range
-                if not (min_is >= app_is_min and max_is <= app_is_max):
+                # Check if dataset ionic strength OVERLAPS with this formula's applicable range
+                # (overlap = any part of dataset IS range falls within formula range)
+                # This is more permissive than strict containment — if dataset IS
+                # partially overlaps the formula range, the formula is applicable.
+                overlaps = (min_is <= app_is_max) and (max_is >= app_is_min)
+                if not overlaps:
                     logger.debug(
-                        f"Dataset IS range [{min_is:.4f}, {max_is:.4f}] outside formula applicable range "
+                        f"Dataset IS range [{min_is:.4f}, {max_is:.4f}] does not overlap formula applicable range "
                         f"[{app_is_min:.4f}, {app_is_max:.4f}] for {salt_to_inhibit} (formula: {app_is_str})"
                     )
                     continue

@@ -4,8 +4,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import json
 
 async def main():
-    client = AsyncIOMotorClient("mongodb+srv://smtnayem:smtnayemproject@cluster0.p87lrd6.mongodb.net/jimgreen?appName=Cluster0")
-    db = client.get_database("jimgreen")
+    client = AsyncIOMotorClient("mongodb://admin:UEPRDaalMvTsd4p7@13.48.240.227:27017/aquaadvisor?authSource=admin&directConnection=true")
+    db = client.get_database("aquaadvisor")
     col = db.get_collection("saturation_runs")
     doc = await col.find_one({}, sort=[("_id", -1)])
     if doc:
