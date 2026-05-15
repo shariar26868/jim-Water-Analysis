@@ -6560,16 +6560,35 @@ class SaturationService:
                     )
 
         # 3. Handle Product vs Raw Material Input
-        if product_data and isinstance(product_data.get("rawMaterials"), list):
-            for rm_item in product_data.get("rawMaterials", []):
-                rm_chem = rm_item.get("rawMaterialData")
-                if not rm_chem:
-                    continue
-                pct_in_prod = float(rm_item.get("percentageInProduct", 0.0)) / 100.0
+        # Supports multiple payload structures:
+        #   A) product_blend.rawMaterials[] — blended product with multiple raw materials
+        #   B) product_blend.rawMaterialChemistry — single raw material embedded in product
+        #   C) product_blend itself has inhibitionFormulas — treat as raw material directly
+        #   D) raw_material_chemistry — single raw material (fallback)
+        if product_data:
+            if isinstance(product_data.get("rawMaterials"), list) and product_data["rawMaterials"]:
+                # Case A: blended product
+                for rm_item in product_data["rawMaterials"]:
+                    rm_chem = rm_item.get("rawMaterialData") or rm_item.get("rawMaterialChemistry")
+                    if not rm_chem:
+                        continue
+                    pct_in_prod = float(rm_item.get("percentageInProduct", 100.0)) / 100.0
+                    active_pct = float(rm_chem.get("activePercentage", 100.0)) / 100.0
+                    rm_dosage = user_dosage_ppm * pct_in_prod * active_pct
+                    process_raw_material(rm_chem, rm_dosage)
+            elif product_data.get("rawMaterialChemistry"):
+                # Case B: single raw material embedded
+                rm_chem = product_data["rawMaterialChemistry"]
                 active_pct = float(rm_chem.get("activePercentage", 100.0)) / 100.0
-                rm_dosage = user_dosage_ppm * pct_in_prod * active_pct
-                process_raw_material(rm_chem, rm_dosage)
+                process_raw_material(rm_chem, user_dosage_ppm * active_pct)
+            elif product_data.get("inhibitionFormulas"):
+                # Case C: product_blend itself has inhibitionFormulas
+                process_raw_material(product_data, user_dosage_ppm)
+            elif raw_material_data:
+                # Fallback to raw_material_chemistry
+                process_raw_material(raw_material_data, user_dosage_ppm)
         elif raw_material_data:
+            # Case D: only raw_material_chemistry provided
             process_raw_material(raw_material_data, user_dosage_ppm)
 
         # 4. Apply colors to results
