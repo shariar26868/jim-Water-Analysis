@@ -77,10 +77,15 @@ class CalculationService:
     async def calculate_larson_skold(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Larson-Skold Corrosion Index
-        
-        Formula: ([Cl-] + [SO4-2]) / ([HCO3-] + [CO3-2])
-        All in meq/L
-        
+
+        Formula: (Cl⁻ + SO₄²⁻) / (HCO₃⁻ + CO₃²⁻)
+        All in mol/kg (client spec)
+
+        Unit conversions (client formula):
+          Cl  (mol/kg) = mg/L / 1000 / 35.5
+          SO4 (mol/kg) = mg/L / 1000 / 96.06
+          HCO3 (mol/kg) = Alkalinity_as_CaCO3 / 50 / 1000
+
         Interpretation:
         - <0.8: Low Risk
         - 0.8-1.2: Moderate Risk
@@ -96,25 +101,43 @@ class CalculationService:
                 so4 = self.get_param_value(parameters, "Sulphate", 0.0)
             if so4 == 0.0:
                 so4 = self.get_param_value(parameters, "SO4", 0.0)
-            
+
             hco3 = self.get_param_value(parameters, "Bicarbonate", 0.0)
             if hco3 == 0.0:
                 hco3 = self.get_param_value(parameters, "Alkalinity", 0.0)
             if hco3 == 0.0:
                 hco3 = self.get_param_value(parameters, "HCO3", 0.0)
-            
+
             co3 = self.get_param_value(parameters, "Carbonate", 0.0)
-            
-            # Convert to meq/L
-            cl_meq = self.mg_l_to_meq_l(cl, "Cl")
-            so4_meq = self.mg_l_to_meq_l(so4, "SO4")
-            hco3_meq = self.mg_l_to_meq_l(hco3, "HCO3")
-            co3_meq = self.mg_l_to_meq_l(co3, "CO3")
-            
+
+            # Convert to mol/kg (client formula)
+            # Cl: mg/L / 1000 / 35.5
+            cl_mol = cl / 1000.0 / 35.45
+            # SO4: mg/L / 1000 / 96.06
+            so4_mol = so4 / 1000.0 / 96.06
+            # HCO3: Alkalinity_as_CaCO3 / 50 / 1000
+            # If hco3 is already as CaCO3 (unit contains "CaCO3"), use directly
+            # If hco3 is as HCO3 (elemental), convert to CaCO3 first: × (100.09/61.02)
+            hco3_unit = ""
+            hco3_raw = parameters.get("HCO3") or parameters.get("Alkalinity") or parameters.get("Bicarbonate")
+            if isinstance(hco3_raw, dict):
+                hco3_unit = (hco3_raw.get("unit") or "").lower()
+
+            if "caco3" in hco3_unit:
+                # Already as CaCO3
+                hco3_as_caco3 = hco3
+            else:
+                # Convert from HCO3 mg/L to CaCO3 mg/L
+                hco3_as_caco3 = hco3 * (100.09 / 61.02)
+
+            hco3_mol = hco3_as_caco3 / 50.0 / 1000.0
+            # CO3: mg/L / 1000 / 60.01
+            co3_mol = co3 / 1000.0 / 60.01
+
             # Calculate index
-            numerator = cl_meq + so4_meq
-            denominator = hco3_meq + co3_meq
-            
+            numerator = cl_mol + so4_mol
+            denominator = hco3_mol + co3_mol
+
             if denominator == 0:
                 logger.warning("Larson-Skold: denominator is zero")
                 return {
@@ -122,9 +145,9 @@ class CalculationService:
                     "interpretation": "Cannot calculate (no alkalinity)",
                     "risk_level": "Unknown"
                 }
-            
+
             ls_index = numerator / denominator
-            
+
             # Interpretation
             if ls_index < 0.8:
                 interpretation = "Low Risk"
@@ -135,21 +158,21 @@ class CalculationService:
             else:
                 interpretation = "High Risk"
                 risk_level = "High"
-            
-            logger.info(f"Larson-Skold Index: {ls_index:.2f} - {interpretation}")
-            
+
+            logger.info(f"Larson-Skold Index: {ls_index:.3f} - {interpretation}")
+
             return {
                 "index": round(ls_index, 3),
                 "interpretation": interpretation,
                 "risk_level": risk_level,
                 "components": {
-                    "chloride_meq": round(cl_meq, 3),
-                    "sulfate_meq": round(so4_meq, 3),
-                    "bicarbonate_meq": round(hco3_meq, 3),
-                    "carbonate_meq": round(co3_meq, 3)
+                    "chloride_mol":    round(cl_mol, 6),
+                    "sulfate_mol":     round(so4_mol, 6),
+                    "bicarbonate_mol": round(hco3_mol, 6),
+                    "carbonate_mol":   round(co3_mol, 6),
                 }
             }
-            
+
         except Exception as e:
             logger.error(f"Larson-Skold calculation failed: {e}")
             raise
@@ -209,15 +232,9 @@ class CalculationService:
             pCa = -math.log10(ca_mol)
             pAlk = -math.log10(alk_mol)
             
-            # Calculate K coefficient
-            # I = TDS/1000 used in exponent
-            # ionic_strength (from PHREEQC) used only for condition threshold
-            I = tds / 1000.0  # TDS in g/L → used in formula exponent
-
-            if ionic_strength <= 1.2:
-                K = 2.022 * math.exp(1.737 * I) - 0.315 * (temp_c ** 0.3)
-            else:
-                K = 1.7 * math.exp(2.1 * I) - 0.5 * (temp_c ** 0.4)
+            # Calculate K coefficient (client formula)
+            # K = 0.3 + (0.01 × log10(TDS + 1)) − (0.0005 × (Temp_C - 25))
+            K = 0.3 + (0.01 * math.log10(tds + 1)) - (0.0005 * (temp_c - 25))
             
             # Calculate S&D Index
             sd_index = pH - pCa - pAlk - K
