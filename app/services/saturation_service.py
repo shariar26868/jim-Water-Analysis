@@ -6751,6 +6751,24 @@ class SaturationService:
         # ── 5. Resolve temperatures ───────────────────────────────────────────
         asset_info = req.get("asset_info") or {}
 
+        # --- AI Wet Bulb Estimation ---
+        if asset_info.get("wetBulbTempF") is None and asset_info.get("wetBulbTemp") is None:
+            location = req.get("customer_information", {}).get("location") or asset_info.get("location") or asset_info.get("city")
+            if location:
+                try:
+                    from app.services.weather_ai_service import WeatherAIService
+                    weather_ai = WeatherAIService()
+                    estimated_wb = await weather_ai.estimate_wet_bulb_temp(
+                        location=location,
+                        date_str=req.get("date")
+                    )
+                    if estimated_wb is not None:
+                        asset_info["wetBulbTempF"] = estimated_wb
+                        logger.info(f"Injected AI-estimated wet bulb temp {estimated_wb}°F into asset_info")
+                except Exception as e:
+                    logger.error(f"Error during AI wet bulb estimation: {e}")
+        # ------------------------------
+
         cold_temp_raw  = asset_info.get("supplyTemperature") or req.get("temp_min") or 32.2
         cold_temp_unit = asset_info.get("supplyTemperatureType") or req.get("temp_unit") or "°F"
         cold_temp_c    = _to_celsius(float(cold_temp_raw), cold_temp_unit)
