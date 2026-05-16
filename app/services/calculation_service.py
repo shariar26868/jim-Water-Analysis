@@ -135,7 +135,8 @@ class CalculationService:
             co3_mol = co3 / 1000.0 / 60.01
 
             # Calculate index
-            numerator = cl_mol + so4_mol
+            # ✅ FIXED: SO4 is divalent, must count twice in corrosion numerator
+            numerator = cl_mol + (2 * so4_mol)
             denominator = hco3_mol + co3_mol
 
             if denominator == 0:
@@ -216,6 +217,24 @@ class CalculationService:
             tds = self.get_param_value(parameters, "TDS", 0.0)
             if tds == 0.0:
                 tds = self.get_param_value(parameters, "Total_Dissolved_Solids", 0.0)
+            
+            # ✅ FIX: Check if Ca is in "as CaCO3" format and convert to elemental
+            ca_unit = ""
+            ca_raw = parameters.get("Calcium") or parameters.get("Ca")
+            if isinstance(ca_raw, dict):
+                ca_unit = (ca_raw.get("unit") or "").lower()
+            if "caco3" in ca_unit:
+                # Convert from Ca as CaCO3 to elemental Ca: divide by 2.497
+                ca_mg_l = ca_mg_l / 2.497
+            
+            # ✅ FIX: Check if Alkalinity is in "as CaCO3" format and convert to HCO3
+            alk_unit = ""
+            alk_raw = parameters.get("Alkalinity") or parameters.get("Bicarbonate") or parameters.get("HCO3")
+            if isinstance(alk_raw, dict):
+                alk_unit = (alk_raw.get("unit") or "").lower()
+            if "caco3" in alk_unit:
+                # Convert from Alk as CaCO3 to elemental HCO3: divide by 1.640
+                alk_mg_l = alk_mg_l / 1.640
             
             # Convert to mol/kg
             ca_mol = self.mg_l_to_mol_kg(ca_mg_l, 40.08)
@@ -299,11 +318,29 @@ class CalculationService:
             if alk_mg_l == 0.0:
                 alk_mg_l = self.get_param_value(parameters, "HCO3", 0.0)
             
-            # Convert Ca to CaCO3 equivalent (if Ca is elemental mg/L)
-            ca_as_caco3 = ca_mg_l * (100.09 / 40.08)
+            # ✅ FIX: Check if Ca is in "as CaCO3" format and convert to elemental first
+            ca_unit = ""
+            ca_raw = parameters.get("Calcium") or parameters.get("Ca")
+            if isinstance(ca_raw, dict):
+                ca_unit = (ca_raw.get("unit") or "").lower()
+            if "caco3" in ca_unit:
+                # Already as CaCO3, use directly
+                ca_as_caco3 = ca_mg_l
+            else:
+                # Convert from elemental Ca to CaCO3 equivalent (if Ca is elemental mg/L)
+                ca_as_caco3 = ca_mg_l * (100.09 / 40.08)
             
-            # Convert Alkalinity to CaCO3 equivalent (if HCO3 is in mg/L as HCO3)
-            alk_as_caco3 = alk_mg_l * (100.09 / 61.02)
+            # ✅ FIX: Check if Alkalinity is in "as CaCO3" format
+            alk_unit = ""
+            alk_raw = parameters.get("Alkalinity") or parameters.get("Bicarbonate") or parameters.get("HCO3")
+            if isinstance(alk_raw, dict):
+                alk_unit = (alk_raw.get("unit") or "").lower()
+            if "caco3" in alk_unit:
+                # Already as CaCO3, use directly
+                alk_as_caco3 = alk_mg_l
+            else:
+                # Convert from HCO3 elemental to CaCO3 equivalent (if HCO3 is in mg/L as HCO3)
+                alk_as_caco3 = alk_mg_l * (100.09 / 61.02)
             
             # Calculate pHs
             A = (math.log10(tds) - 1) / 10 if tds > 0 else 0
