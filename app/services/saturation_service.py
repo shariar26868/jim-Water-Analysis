@@ -4441,33 +4441,84 @@ def _build_cycled_water_params(
     }
 
     # Ion map: internal key → display label, PHREEQC name, as-unit
+    # Matches PHREEQC SOLUTION block display order
     ion_display = [
-        ("Ca",   "Calcium",      "Ca",          "Ca"),
-        ("Mg",   "Magnesium",    "Mg",          "Mg"),
+        ("Ca",   "Calcium",      "Ca",          "CaCO3"),
+        ("Mg",   "Magnesium",    "Mg",          "CaCO3"),
         ("Na",   "Sodium",       "Na",          "Na"),
         ("K",    "Potassium",    "K",           "K"),
         ("HCO3", "Alkalinity",   "Alkalinity",  "CaCO3"),
         ("Cl",   "Chloride",     "Cl",          "Cl"),
         ("SO4",  "Sulfate",      "S(6)",        "SO4"),
         ("SiO2", "Silica",       "Si",          "SiO2"),
-        ("Fe",   "Iron",         "Fe(2)",       "Fe"),
+        ("Fe",   "Iron",         "Fe",          "Fe2O3"),
         ("PO4",  "Phosphate",    "P",           "PO4"),
         ("Ba",   "Barium",       "Ba",          "Ba"),
         ("Sr",   "Strontium",    "Sr",          "Sr"),
         ("Mn",   "Manganese",    "Mn",          "Mn"),
         ("F",    "Fluoride",     "F",           "F"),
+        ("Zn",   "Zinc",         "Zn",          "Zn"),
+        ("Cu",   "Copper",       "Cu",          "Cu"),
+        ("Pb",   "Lead",         "Pb",          "Pb"),
+        ("NO3",  "Nitrate",      "N(5)",        "NO3"),
     ]
+
+    # CaCO3 conversion factors (elemental mg/L → as CaCO3 mg/L)
+    _TO_CACO3 = {
+        "Ca":  100.09 / 40.08,   # Ca elemental → CaCO3
+        "Mg":  100.09 / 24.31,   # Mg elemental → CaCO3
+        "HCO3": 100.09 / 61.02,  # HCO3 → CaCO3 (if not already as CaCO3)
+    }
+
+    # Identify which ion is the charge balance ion (from mapped_params metadata)
+    charge_ion = mapped_params.get("_balance_anion") or mapped_params.get("_balance_cation")
 
     for ion_key, label, phreeqc_name, as_unit in ion_display:
         conc = _get_conc(ion_key)
         if conc is not None:
             unit = _get_unit(ion_key)
+            is_charge_balance = (ion_key == charge_ion)
+
+            # Convert to display unit if needed
+            display_value = conc
+            display_unit = "ppm"
+
+            if ion_key in ("Ca", "Mg"):
+                # mapped_params has elemental mg/L — convert to as CaCO3 for display
+                unit_raw = unit.lower()
+                if "caco3" not in unit_raw:
+                    display_value = round(conc * _TO_CACO3[ion_key], 4)
+                else:
+                    display_value = conc
+                display_unit = "ppm"
+                as_unit = "CaCO3"
+
+            elif ion_key == "HCO3":
+                # Show as CaCO3 ppm
+                unit_raw = unit.lower()
+                if "caco3" not in unit_raw:
+                    display_value = round(conc * _TO_CACO3["HCO3"], 4)
+                else:
+                    display_value = conc
+                display_unit = "ppm"
+                as_unit = "CaCO3"
+
+            elif ion_key == "Fe":
+                # Fe as Fe2O3: multiply by (159.69 / 2 / 55.845)
+                display_value = round(conc * (159.69 / 2 / 55.845), 4)
+                display_unit = "ppm"
+                as_unit = "Fe2O3"
+
+            else:
+                display_unit = "ppm"
+
             params[ion_key] = {
-                "value":        conc,
-                "unit":         unit,
-                "as":           as_unit,
-                "phreeqc_name": phreeqc_name,
-                "label":        label,
+                "value":          display_value,
+                "unit":           display_unit,
+                "as":             as_unit,
+                "phreeqc_name":   phreeqc_name,
+                "label":          label,
+                "charge_balance": is_charge_balance,
             }
 
     # Dissolved Oxygen
