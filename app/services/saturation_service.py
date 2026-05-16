@@ -5305,7 +5305,8 @@ class SaturationService:
                     base_val = _mapped_base[ion_key]
                     base_num = float(base_val.get("value", 0) if isinstance(base_val, dict) else base_val)
                     scaled   = round(base_num * coc, 4)
-                    entry    = {"value": scaled, "unit": "mg/L"}
+                    # ✅ FIX: Preserve unit information from _mapped_base for unit-aware calculations
+                    entry    = {"value": scaled, "unit": base_val.get("unit", "mg/L") if isinstance(base_val, dict) else "mg/L"}
                     # Add under normalized key (e.g. "Ca")
                     conc_params[ion_key] = entry
                     # Add under human-friendly aliases (e.g. "Calcium") if not already present
