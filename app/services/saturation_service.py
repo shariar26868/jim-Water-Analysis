@@ -6952,6 +6952,9 @@ class SaturationService:
                 f"Using 'Cl' instead."
             )
 
+        # Extract customer info from request
+        customer_info = req.get("customer_info") or {}
+        
         doc = {
             "run_id":                  run_id,
             "salt_id":                 effective_salt,
@@ -6986,10 +6989,18 @@ class SaturationService:
             "product_blend":           req.get("product_blend"),
             "raw_material_chemistry":  req.get("raw_material_chemistry"),
             "asset_info":              asset_info,
+            "customer_info":           customer_info,
             "cooling_tower_analysis":  cooling_tower_analysis,
             # ── Convenience object: all 3 sections in one place for frontend ──
             "asset_summary": {
-                # 1. Asset Information
+                # 1. Customer Information
+                "customer_information": {
+                    "name":     customer_info.get("name"),
+                    "site_name": customer_info.get("siteName"),
+                    "location":  customer_info.get("location"),
+                    "address":   customer_info.get("address"),
+                } if customer_info else None,
+                # 2. Asset Information
                 "asset_information": {
                     "name":             asset_info.get("name"),
                     "type":             asset_info.get("type"),
@@ -7000,15 +7011,17 @@ class SaturationService:
                     "supply_temperature_unit":asset_info.get("supplyTemperatureType", "°F"),
                     "return_temperature":     asset_info.get("returnTemperature"),
                     "return_temperature_unit":asset_info.get("returnTemperatureType", "°F"),
+                    "wet_bulb_temperature":   asset_info.get("wetBulbTempF"),
+                    "hottest_skin_temperature": asset_info.get("hottestSkinTemperature"),
                     "fill_type":        asset_info.get("fillType"),
                     "draft_type":       asset_info.get("draftType"),
                 },
-                # 2. Materials
+                # 3. Materials
                 "materials": {
                     "metallurgy": asset_info.get("systemMetallurgy") or [],
                     "system_materials": asset_info.get("systemMaterials") or [],
                 },
-                # 3. Cooling Tower Analysis (system-level only, DO removed — see grid_results[].dissolved_oxygen_ppm)
+                # 4. Cooling Tower Analysis (system-level only, DO removed — see grid_results[].dissolved_oxygen_ppm)
                 "cooling_tower_analysis": {
                     **{
                         k: v for k, v in (
@@ -7016,8 +7029,11 @@ class SaturationService:
                         ).items()
                         if k != "dissolved_oxygen"   # DO is per-CoC → in grid_results[].dissolved_oxygen_ppm
                     },
-                    # Keep wet bulb temp here for display in Cooling Tower Analysis section
-                    "wet_bulb_temp_f":  (cooling_tower_analysis.get("system") or {}).get("wet_bulb_temp_f"),
+                    # Ensure all 4 temperature fields are exposed
+                    "supply_temperature_f":   asset_info.get("supplyTemperature"),
+                    "return_temperature_f":   asset_info.get("returnTemperature"),
+                    "wet_bulb_temp_f":        (cooling_tower_analysis.get("system") or {}).get("wet_bulb_temp_f"),
+                    "hottest_skin_temperature_f": asset_info.get("hottestSkinTemperature"),
                     "wet_bulb_temp_c":  round(((cooling_tower_analysis.get("system") or {}).get("wet_bulb_temp_f") - 32) * 5 / 9, 2)
                                         if (cooling_tower_analysis.get("system") or {}).get("wet_bulb_temp_f") is not None
                                         else (cooling_tower_analysis.get("system") or {}).get("dissolved_oxygen", {}).get("wet_bulb_temp_c"),
