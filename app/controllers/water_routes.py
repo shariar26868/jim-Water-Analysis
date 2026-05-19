@@ -1643,8 +1643,8 @@ async def calculate_cooling_tower(data: Dict[str, Any] = Body(...)):
     """
     try:
         tower_service = CoolingTowerService()
-        
-        # Extract and validate parameters
+
+        # Extract and validate primary parameters
         recirc_rate = data.get("recirculation_rate_gpm")
         hot_temp = data.get("hot_water_temp_f")
         cold_temp = data.get("cold_water_temp_f")
@@ -1652,29 +1652,89 @@ async def calculate_cooling_tower(data: Dict[str, Any] = Body(...)):
         coc = data.get("coc")
         drift_percent = data.get("drift_percent", 0.1)
         evap_factor = data.get("evaporation_factor_percent", 85.0)
-        
-        # Validation
-        if not all([recirc_rate, hot_temp, cold_temp, wet_bulb, coc]):
+
+        # Optional: allow user to provide base + concentrated water to compute CoC
+        base_water = data.get("base_water") or data.get("base_water_parameters")
+        concentrated_water = data.get("concentrated_water")
+        tracer_ion = data.get("tracer_ion", "Ca")
+
+        # Basic validation for tower inputs
+        if not all([recirc_rate, hot_temp, cold_temp, wet_bulb]):
             raise HTTPException(
                 status_code=400,
-                detail="Missing required parameters: recirculation_rate_gpm, hot_water_temp_f, cold_water_temp_f, wet_bulb_temp_f, coc"
+                detail="Missing required parameters: recirculation_rate_gpm, hot_water_temp_f, cold_water_temp_f, wet_bulb_temp_f"
             )
-        
+
+        # If CoC is not provided but base/concentrated waters are, compute CoC
+        coc_result = None
+        if (not coc) and base_water and concentrated_water:
+            try:
+                coc_result = await tower_service.calculate_coc(base_water, concentrated_water, tracer_ion)
+                coc = coc_result.get("coc")
+            except Exception:
+                coc_result = {"coc": None, "error": "CoC calculation failed"}
+
+        # Require CoC either via input or computed
+        if coc is None:
+            raise HTTPException(
+                status_code=400,
+                detail="CoC is required either directly or by providing base_water and concentrated_water"
+            )
+
         # Calculate water balance
         balance = await tower_service.calculate_tower_water_balance(
             recirc_rate,
             hot_temp,
             cold_temp,
             wet_bulb,
-            coc,
+            float(coc),
             drift_percent,
             evap_factor
         )
-        
-        return {
+
+        # Aggregate chemical dosing info if present
+        chemical_info = None
+        # possible places for treatment info
+        treatment = data.get("treatment") or data.get("product") or {}
+        dosage_ppm = data.get("dosage_ppm") or treatment.get("dosage") or treatment.get("dosage_ppm")
+        product_price_per_lb = treatment.get("price_per_lb") or treatment.get("product_price_per_lb") or data.get("product_price_per_lb")
+        product_name = treatment.get("product_name") or treatment.get("productId") or treatment.get("productId")
+
+        try:
+            bd_rate = None
+            if balance and isinstance(balance, dict):
+                bd = balance.get("blowdown") or {}
+                bd_rate = bd.get("blowdown_rate_gpm")
+
+            if dosage_ppm and bd_rate:
+                per_day = await tower_service.calculate_chemical_required_per_day(float(dosage_ppm), float(bd_rate))
+                per_year = await tower_service.calculate_chemical_required_per_year(per_day["chemical_lbs_per_day"], per_day.get("operating_days_per_year", 350))
+                cost = None
+                if product_price_per_lb:
+                    cost = await tower_service.calculate_chemical_cost(float(dosage_ppm), float(product_price_per_lb))
+
+                chemical_info = {
+                    "product_name": product_name,
+                    "dosage_ppm": float(dosage_ppm),
+                    "per_day": per_day,
+                    "per_year": per_year,
+                    "cost": cost
+                }
+
+        except Exception as e:
+            logger.exception("Chemical dosing aggregation failed")
+            chemical_info = {"error": str(e)}
+
+        response = {
             "success": True,
-            "cooling_tower_analysis": balance
+            "cooling_tower_analysis": balance,
+            "cycles_of_concentration": coc_result if coc_result is not None else {"coc": float(coc), "source": "input"},
         }
+
+        if chemical_info is not None:
+            response["chemical_dosing"] = chemical_info
+
+        return response
         
     except HTTPException:
         raise

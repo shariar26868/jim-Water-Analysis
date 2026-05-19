@@ -6190,6 +6190,7 @@ class SaturationService:
         coc_list: List[float],
         dosage_ppm: float,
         product_blend: Optional[Dict[str, Any]],
+        mapped_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Full dynamic cooling tower analysis from asset_info payload.
@@ -6394,6 +6395,23 @@ class SaturationService:
                 chem.update({"lbs_per_day": None, "lbs_per_year": None,
                              "note": "Blowdown not available (CoC ≤ 1 or data missing)"})
             entry["chemical"] = chem
+
+            # Add cycled water parameters if mapped params available
+            try:
+                if mapped_params:
+                    # Use hot_temp_f as evaluation temp when present, else cold_temp_f
+                    temp_display = hot_temp_f if hot_temp_f is not None else (cold_temp_f if cold_temp_f is not None else 25.0)
+                    temp_c = round((float(temp_display) - 32) * 5 / 9, 2)
+                    natural_ph = _get_ion_value(mapped_params, "pH") or float(mapped_params.get("pH", 7.0) if not isinstance(mapped_params.get("pH"), dict) else mapped_params.get("pH").get("value", 7.0))
+                    desc = {}  # no PHREEQC description available in this context
+                    do_ppm = do_ppm_sys
+                    entry["cycled_water_parameters"] = _build_cycled_water_params(
+                        mapped_params, coc, temp_display, temp_c, natural_ph, desc, do_ppm
+                    )
+                else:
+                    entry["cycled_water_parameters"] = None
+            except Exception:
+                entry["cycled_water_parameters"] = None
 
             per_coc.append(entry)
 
@@ -6885,6 +6903,7 @@ class SaturationService:
                 coc_list     = coc_list,
                 dosage_ppm   = float(req.get("dosage_ppm") or 2.0),
                 product_blend= req.get("product_blend"),
+                mapped_params= mapped,
             )
         except Exception as e:
             logger.warning(f"Cooling tower analysis failed (non-fatal): {e}")
