@@ -6992,6 +6992,15 @@ class SaturationService:
         # Extract customer info from request
         customer_info = req.get("customer_info") or {}
         
+        # Extract per_coc from cooling_tower_analysis and expose top-level
+        per_coc_top = None
+        if isinstance(cooling_tower_analysis, dict):
+            per_coc_top = cooling_tower_analysis.get("per_coc")
+            # create a copy without per_coc for storage in cooling_tower_analysis field
+            cleaned_cta = {k: v for k, v in (cooling_tower_analysis or {}).items() if k != "per_coc"}
+        else:
+            cleaned_cta = cooling_tower_analysis
+
         doc = {
             "run_id":                  run_id,
             "salt_id":                 effective_salt,
@@ -7027,7 +7036,8 @@ class SaturationService:
             "raw_material_chemistry":  req.get("raw_material_chemistry"),
             "asset_info":              asset_info,
             "customer_info":           customer_info,
-            "cooling_tower_analysis":  cooling_tower_analysis,
+            "cooling_tower_analysis":  cleaned_cta,
+            "Per Cycle Concentration": per_coc_top,
             # ── Convenience object: all 3 sections in one place for frontend ──
             "asset_summary": {
                 # 1. Customer Information
