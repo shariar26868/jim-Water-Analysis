@@ -7033,7 +7033,7 @@ class SaturationService:
             "asset_info":              asset_info,
             "customer_info":           customer_info,
             "cooling_tower_analysis":  cooling_tower_analysis,
-            "Per Cycle Concentration": per_coc_top,
+            "Per_Cycle_Conection":     per_coc_top,
             # ── Convenience object: all 3 sections in one place for frontend ──
             "asset_summary": {
                 # 1. Customer Information
