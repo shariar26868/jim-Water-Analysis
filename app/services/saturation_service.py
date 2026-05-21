@@ -6268,9 +6268,19 @@ class SaturationService:
         elif approach_to_wb > 0:
             approach_f = approach_to_wb
             approach_source = "approachToWB field"
+            if cold_temp_f is None and wet_bulb_f is not None:
+                cold_temp_f = round(wet_bulb_f + approach_f, 2)
+            elif wet_bulb_f is None and cold_temp_f is not None:
+                wet_bulb_f = round(cold_temp_f - approach_f, 2)
         elif wet_bulb_f is not None:
             approach_f = 7.0
             approach_source = "Default fallback (Supply Temp not provided)"
+            if cold_temp_f is None:
+                cold_temp_f = round(wet_bulb_f + approach_f, 2)
+        elif cold_temp_f is not None:
+            approach_f = 7.0
+            approach_source = "Default fallback (Wet Bulb Temp not provided)"
+            wet_bulb_f = round(cold_temp_f - approach_f, 2)
         else:
             approach_f = None
 
