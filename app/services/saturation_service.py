@@ -6261,12 +6261,26 @@ class SaturationService:
             range_f = None
 
         # ── System-level: Approach ────────────────────────────────────────────
+        approach_source = None
         if cold_temp_f is not None and wet_bulb_f is not None:
             approach_f = round(cold_temp_f - wet_bulb_f, 2)
+            approach_source = "Calculated (Cold Water Temp - Wet Bulb Temp)"
         elif approach_to_wb > 0:
             approach_f = approach_to_wb
+            approach_source = "approachToWB field"
+        elif wet_bulb_f is not None:
+            approach_f = 7.0
+            approach_source = "Default fallback (Supply Temp not provided)"
         else:
             approach_f = None
+
+        # If cold_temp_f was missing but we have wet_bulb and approach, estimate it
+        if cold_temp_f is None and wet_bulb_f is not None and approach_f is not None:
+            cold_temp_f = round(wet_bulb_f + approach_f, 2)
+
+        # If hot_temp_f was missing but we have cold_temp and range, estimate it
+        if hot_temp_f is None and cold_temp_f is not None and range_f is not None:
+            hot_temp_f = round(cold_temp_f + range_f, 2)
 
         # ── System-level: Dissolved Oxygen ────────────────────────────────────
         ref_temp_f = hot_temp_f if hot_temp_f is not None else cold_temp_f
@@ -6301,7 +6315,7 @@ class SaturationService:
                 "approach_f": approach_f,
                 # Temperature difference conversion: ΔF × 5/9 = ΔC (no -32 offset)
                 "approach_c": round(approach_f * 5 / 9, 2) if approach_f is not None else None,
-                **({"source": "approachToWB field"} if approach_to_wb > 0 and wet_bulb_f is None else {}),
+                **({"source": approach_source} if approach_source is not None else {}),
                 **({"note": "Wet bulb temperature not provided"} if approach_f is None else {}),
             },
             "efficiency": (
