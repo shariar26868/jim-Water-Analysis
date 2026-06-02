@@ -5241,7 +5241,12 @@ class SaturationService:
         asset_info       = req.get("asset_info") or {}
         raw_mat          = req.get("raw_material_chemistry") or {}
         product_blend    = req.get("product_blend") or {}
-        dosage_ppm       = float(req.get("dosage_ppm") or 2.0)
+        # dosage_ppm: user-provided value, ensure proper float conversion
+        _dosage_raw = req.get("dosage_ppm")
+        try:
+            dosage_ppm = float(_dosage_raw) if _dosage_raw is not None else 2.0
+        except (TypeError, ValueError):
+            dosage_ppm = 2.0
         temp_unit        = req.get("temp_unit", "C")
 
         recirc_rate_gpm  = float(asset_info.get("recirculationRate") or 0)
@@ -5253,7 +5258,13 @@ class SaturationService:
         metallurgy       = asset_info.get("systemMetallurgy") or []
 
         product_cost_per_lb = float(product_blend.get("costPerLb") or 0)
-        product_name        = product_blend.get("productName") or "Product"
+        # Product name: prefer product_blend.productName, fallback to raw_material commonName
+        product_name = (
+            product_blend.get("productName")
+            or (raw_mat.get("commonName") if raw_mat else None)
+            or (raw_mat.get("rawMaterialId") if raw_mat else None)
+            or "Product"
+        )
 
         # Build a mapped (normalized) version of base_water_parameters for calc_svc
         _mapped_base = _map_water_params(base_water_parameters)
@@ -6004,18 +6015,44 @@ class SaturationService:
 
         for r in results:
             try:
-                # Build params with BOTH raw keys AND normalized keys
-                # so calculation_service can find values regardless of key format
+                coc = float(r.get("_grid_CoC", 1.0))
+
+                # Build params with BOTH raw keys AND normalized keys,
+                # with ALL ion concentrations multiplied by CoC.
                 params: Dict[str, Any] = {}
 
-                # 1. Start with raw_water (original OCR keys like "Calcium_as_CaCO3")
+                # 1. Start with raw_water (original OCR keys) × CoC
                 for k, v in raw_water.items():
-                    params[k] = v
+                    if isinstance(v, dict):
+                        raw_val = float(v.get("value", 0) or 0)
+                        unit    = v.get("unit", "mg/L") or "mg/L"
+                        key_l   = k.lower().replace(" ", "_")
+                        # Don't multiply pH, Temperature, Conductivity by CoC
+                        if key_l in ("ph", "temperature", "temp", "conductivity",
+                                     "electrical_conductivity"):
+                            params[k] = v
+                        else:
+                            params[k] = {"value": round(raw_val * coc, 4), "unit": unit}
+                    else:
+                        params[k] = v
 
-                # 2. Add normalized mapped keys (Ca, Mg, Cl, SO4, HCO3, etc.)
+                # 2. Add normalized mapped keys × CoC
                 if mapped_water:
                     for k, v in mapped_water.items():
-                        params[k] = v
+                        if k.startswith("_"):
+                            params[k] = v  # internal metadata keys — don't multiply
+                            continue
+                        if k in ("pH", "Temperature", "pe"):
+                            params[k] = v
+                        elif isinstance(v, dict):
+                            raw_val = float(v.get("value", 0) or 0)
+                            params[k] = {**v, "value": round(raw_val * coc, 4)}
+                        else:
+                            try:
+                                params[k] = round(float(v) * coc, 4)
+                            except (TypeError, ValueError):
+                                params[k] = v
+
                     # Also add common aliases that calculation_service expects
                     alias_map = {
                         "Ca":   ["Calcium", "calcium"],
@@ -6030,10 +6067,33 @@ class SaturationService:
                         "PO4":  ["Phosphate", "phosphate"],
                     }
                     for ion_key, aliases in alias_map.items():
-                        if ion_key in mapped_water:
+                        if ion_key in params:
                             for alias in aliases:
                                 if alias not in params:
-                                    params[alias] = mapped_water[ion_key]
+                                    params[alias] = params[ion_key]
+
+                # 3. Estimate TDS from Conductivity if not provided
+                # TDS ≈ 0.67 × Conductivity (standard approximation) × CoC
+                tds = 0.0
+                for tds_key in ("TDS", "Total_Dissolved_Solids", "tds"):
+                    if tds_key in params:
+                        v = params[tds_key]
+                        tds = float(v.get("value", 0) if isinstance(v, dict) else v)
+                        break
+                if tds == 0.0:
+                    for cond_key in ("Conductivity", "conductivity",
+                                     "Electrical_Conductivity", "electrical_conductivity"):
+                        cond_raw = raw_water.get(cond_key)
+                        if cond_raw is not None:
+                            cond_val = float(
+                                cond_raw.get("value", 0) if isinstance(cond_raw, dict)
+                                else cond_raw
+                            )
+                            if cond_val > 0:
+                                tds = round(0.67 * cond_val * coc, 2)
+                                break
+                if tds > 0:
+                    params["TDS"] = {"value": tds, "unit": "mg/L"}
 
                 # Use natural pH from CO2 equilibration (correct pH)
                 grid_ph   = float(r.get("_grid_pH") or r.get("_natural_ph_at_cold") or 7.0)

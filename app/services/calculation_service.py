@@ -113,8 +113,8 @@ class CalculationService:
             # Convert to mol/kg (client formula)
             # Cl: mg/L / 1000 / 35.5
             cl_mol = cl / 1000.0 / 35.45
-            # SO4: mg/L / 1000 / 96.06
-            so4_mol = so4 / 1000.0 / 96.06
+            # SO4: 2 × (mg/L / 1000 / 96.06)  — client spec: 2x SO4
+            so4_mol = 2.0 * (so4 / 1000.0 / 96.06)
             # HCO3: Alkalinity_as_CaCO3 / 50 / 1000
             # If hco3 is already as CaCO3 (unit contains "CaCO3"), use directly
             # If hco3 is as HCO3 (elemental), convert to CaCO3 first: × (100.09/61.02)
