@@ -5062,6 +5062,7 @@ class SaturationService:
                     "temperature":      temp_display,
                     "temperature_unit": "°F" if temp_unit.upper() == "F" else "°C",
                     "selected_salt":    salt_id,
+                    "name":             salt_id or "",
                     "SI":               si_val,
                     "SR":               sr_val,
                     "status":           color_labels.get(r["color_code"], r["color_code"]),
