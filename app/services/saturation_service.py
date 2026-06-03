@@ -6238,6 +6238,7 @@ class SaturationService:
         dosage_ppm: float,
         product_blend: Optional[Dict[str, Any]],
         mapped_params: Optional[Dict[str, Any]] = None,
+        grid_results: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Full dynamic cooling tower analysis from asset_info payload.
@@ -6473,7 +6474,25 @@ class SaturationService:
                     # Use hot_temp_f as evaluation temp when present, else cold_temp_f
                     temp_display = hot_temp_f if hot_temp_f is not None else (cold_temp_f if cold_temp_f is not None else 25.0)
                     temp_c = round((float(temp_display) - 32) * 5 / 9, 2)
-                    natural_ph = _get_ion_value(mapped_params, "pH") or float(mapped_params.get("pH", 7.0) if not isinstance(mapped_params.get("pH"), dict) else mapped_params.get("pH").get("value", 7.0))
+
+                    # Use PHREEQC-calculated pH for this CoC from grid_results.
+                    # The grid may have multiple temps per CoC — use the first match
+                    # (all share the same natural pH from Step 1 CO2 equilibration).
+                    calculated_ph = None
+                    if grid_results:
+                        for gr in grid_results:
+                            if gr.get("_grid_CoC") == coc:
+                                calculated_ph = gr.get("_grid_pH")
+                                break
+                    if calculated_ph is None:
+                        # Fallback: use raw makeup water pH
+                        calculated_ph = _get_ion_value(mapped_params, "pH") or float(
+                            mapped_params.get("pH", 7.0)
+                            if not isinstance(mapped_params.get("pH"), dict)
+                            else mapped_params.get("pH").get("value", 7.0)
+                        )
+                    natural_ph = calculated_ph
+
                     desc = {}  # no PHREEQC description available in this context
                     do_ppm = do_ppm_sys
                     entry["cycled_water_parameters"] = _build_cycled_water_params(
@@ -6975,6 +6994,7 @@ class SaturationService:
                 dosage_ppm   = float(req.get("dosage_ppm") or 2.0),
                 product_blend= req.get("product_blend"),
                 mapped_params= mapped,
+                grid_results = results,
             )
         except Exception as e:
             logger.warning(f"Cooling tower analysis failed (non-fatal): {e}")
