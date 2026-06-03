@@ -5058,8 +5058,6 @@ class SaturationService:
                 "opacity":   opacity,
                 "click_data": {
                     "CoC":              r["_grid_CoC"],
-                    "temperature":      temp_display,
-                    "temperature_unit": "°F" if temp_unit.upper() == "F" else "°C",
                     "pH":               r["_grid_pH"],
                     "selected_salt":    salt_id,
                     "SI":               si_val,
@@ -5073,7 +5071,6 @@ class SaturationService:
                 },
                 "tooltip": {
                     "CoC":              r["_grid_CoC"],
-                    "temperature":      f"{temp_display} {'°F' if temp_unit.upper() == 'F' else '°C'}",
                     "pH":               r["_grid_pH"],
                     "SI":               si_val,
                     "SR":               sr_val,
@@ -5167,16 +5164,12 @@ class SaturationService:
                     f"<b>CoC:</b> {cd['CoC']}<br>"
                     f"<b>Temp:</b> {cd['temperature']} {cd['temperature_unit']}<br>"
                     f"<b>pH:</b> {cd['pH']}<br>"
-                    f"<b>SI ({salt_id}):</b> {si:.4f}<br>"
+                    f"<b>SI ({salt_id or 'SI'}):</b> {si:.4f}<br>"
                     f"<b>Status:</b> {cd['status']}"
                     "<extra></extra>"
                 ),
                 "showlegend": False,
             })
-
-        x_vals = [b["x"] for b in bars]
-        z_vals = [b["z"] for b in bars]
-        y_vals = [b["y"] for b in bars if b["y"] is not None]
 
         plotly_layout = {
             "title": f"Saturation Analysis — {salt_id or 'All Salts'}",
@@ -5781,8 +5774,6 @@ class SaturationService:
 
             grid_overview.append({
                 "coc":                      coc,
-                "temperature":              temp,
-                "temp_unit":                temp_suffix,
                 "ph":                       ph,
                 "si":                       si_val,
                 "sr":                       sr_val,
