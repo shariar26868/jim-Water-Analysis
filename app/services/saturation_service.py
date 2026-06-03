@@ -4424,15 +4424,6 @@ def _build_cycled_water_params(
     # Build parameter rows in display order
     params: Dict[str, Any] = {}
 
-    # Temperature (not multiplied by CoC)
-    params["Temperature"] = {
-        "value": round(temp_display, 1),
-        "unit": "°F",
-        "value_c": round(temp_c, 2),
-        "unit_c": "°C",
-        "label": "Temperature",
-    }
-
     # pH (natural pH from CO2 equilibration — not multiplied by CoC)
     params["pH"] = {
         "value": round(natural_ph, 3),
