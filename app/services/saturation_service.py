@@ -5059,6 +5059,8 @@ class SaturationService:
                 "click_data": {
                     "CoC":              r["_grid_CoC"],
                     "pH":               r["_grid_pH"],
+                    "temperature":      temp_display,
+                    "temperature_unit": "°F" if temp_unit.upper() == "F" else "°C",
                     "selected_salt":    salt_id,
                     "SI":               si_val,
                     "SR":               sr_val,
