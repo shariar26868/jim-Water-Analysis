@@ -4550,7 +4550,6 @@ def _build_cycled_water_params(
 
     return {
         "coc":             coc,
-        "temperature":     round(temp_display, 1),
         "temperature_c":   round(temp_c, 2),
         "pH":              round(natural_ph, 3),
         "units":           "mg/L",
