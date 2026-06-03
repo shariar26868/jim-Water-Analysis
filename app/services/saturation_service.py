@@ -5942,8 +5942,6 @@ class SaturationService:
             # Fallback to root-level grid point fields when desc is empty/missing
             description_of_solution.append({
                 "coc":                  coc,
-                "temperature":          temp,
-                "temp_unit":            temp_suffix,
                 "temperature_c":        desc.get("temperature_C") or r.get("_grid_temp_c"),
                 "ph":                   desc.get("pH") or ph,
                 "specific_conductance": desc.get("specific_conductance") or r.get("specific_conductance"),
