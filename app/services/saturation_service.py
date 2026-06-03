@@ -5109,6 +5109,11 @@ class SaturationService:
                 "lighting":   {"ambient": 0.6, "diffuse": 0.8, "specular": 0.3},
             }
 
+        # Define axis values for plotly layout ranges
+        x_vals = unique_coc
+        y_vals = [b["y"] if b["y"] is not None else 0.0 for b in bars]
+        z_vals = unique_temp
+
         if len(unique_coc) > 1:
             dx = (max(unique_coc) - min(unique_coc)) / len(unique_coc) * 0.7
         else:
