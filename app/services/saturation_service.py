@@ -6510,12 +6510,12 @@ class SaturationService:
         """
         Solve inhibition formula for SR given a dosage value.
 
-        Handles client formula formats like:
-          Dose = (0.0001 × SR(Calcite)²) + (SR(Calcite) × 0.0376) + 0.2175
-          y = 0.0001*x^2 + 0.0376*x + 0.2175
-          Dose = A*SR^2 + B*SR + C
+        Handles formula formats:
+          1. Power:     Dose = A × SR^B          → SR = (Dose/A)^(1/B)
+          2. Quadratic: Dose = A×SR^2 + B×SR + C → quadratic formula
+          3. Linear:    Dose = A×SR + B           → SR = (Dose - B) / A
 
-        Returns the positive (higher) root SR value, or None if parse fails.
+        Returns the positive SR value, or None if parse fails.
         """
         if not formula_str:
             return None
@@ -6528,15 +6528,13 @@ class SaturationService:
             # ── Normalize left-hand side ─────────────────────────────────────
             f = re.sub(r'^(y|dose|d)\s*=\s*', '', f)
 
-            # ── Normalize SR variable: "SR(Calcite)" → "sr" ─────────────────
+            # ── Normalize SR variable: "SR(Calcite)", "SR(Hydroxyapatite)" → "sr" ──
             f = re.sub(r'\bsr\s*\([^)]*\)', 'sr', f)
 
             # ── Normalize operators (unicode × ² ³) ─────────────────────────
             f = f.replace('\u00d7', '*').replace('\u00b2', '^2').replace('\u00b3', '^3')
 
             # ── 'x' as multiply operator between terms → '*' ─────────────────
-            # e.g. "0.0001 x SR^2" or "SR(Calcite) x 0.0376"
-            # Must be done BEFORE replacing standalone x → sr
             f = re.sub(r'(?<=[\d\w\)]) x (?=[\d\w\(sr])', ' * ', f)
 
             # standalone 'x' (variable) and 'si' → 'sr'
@@ -6546,15 +6544,32 @@ class SaturationService:
             # ── Remove surrounding parentheses ───────────────────────────────
             f = f.replace('(', ' ').replace(')', ' ')
 
-            # ── Reorder "sr * coeff" → "coeff * sr" for regex consistency ───
-            # Client writes: SR(Calcite) x 0.0376 which becomes: sr * 0.0376
-            # Regex expects the coefficient on the LEFT: 0.0376 * sr
+            # ── Reorder "sr * coeff" → "coeff * sr" ─────────────────────────
             f = re.sub(r'\bsr\s*\*\s*([\d.]+)', r'\1 * sr', f)
 
             f = re.sub(r'\s+', ' ', f).strip()
 
-            # ── 1. Try quadratic: A * sr^2 + B * sr + C ─────────────────────
-            # Pattern supports: "0.0001 * sr^2 + 0.0376 * sr + 0.2175"
+            # ── 1. Try power: A * sr^B (non-integer exponent) ────────────────
+            # Pattern: "1.0947 * sr ^ 0.1038"
+            mp = re.search(
+                r'([\d.]+)\s*\*?\s*sr\s*\^?\s*([\d.]+)',
+                f
+            )
+            if mp:
+                a = float(mp.group(1))
+                b = float(mp.group(2))
+                # Only treat as power formula if exponent is NOT 1 or 2
+                # (to avoid false match with linear/quadratic)
+                if b not in (1.0, 2.0) and a > 0 and b > 0:
+                    # Dose = A × SR^B  →  SR = (Dose / A)^(1/B)
+                    sr_val = (dosage_ppm / a) ** (1.0 / b)
+                    if sr_val > 0:
+                        logger.info(
+                            f"Power formula: A={a}, B={b} → SR={sr_val:.4f} at dose={dosage_ppm}"
+                        )
+                        return round(sr_val, 6)
+
+            # ── 2. Try quadratic: A * sr^2 + B * sr + C ─────────────────────
             mq = re.search(
                 r'([\d.]+)\s*\*?\s*sr\s*\^?\s*2\s*([+\-])\s*([\d.]+)\s*\*?\s*sr\s*([+\-])\s*([\d.]+)',
                 f
@@ -6569,14 +6584,13 @@ class SaturationService:
                 if discriminant >= 0:
                     sr1 = (-b + math.sqrt(discriminant)) / (2 * a)
                     sr2 = (-b - math.sqrt(discriminant)) / (2 * a)
-                    # Return the positive/higher root (physically meaningful SR)
                     positive_roots = [r for r in [sr1, sr2] if r > 0]
                     if positive_roots:
                         return max(positive_roots)
                 logger.warning(f"Negative discriminant in SR formula: {formula_str}")
                 return None
 
-            # ── 2. Try linear: A * sr + B ────────────────────────────────────
+            # ── 3. Try linear: A * sr + B ────────────────────────────────────
             ml = re.search(r'([\d.]+)\s*\*?\s*sr(?:\s*([+\-])\s*([\d.]+))?', f)
             if ml:
                 a = float(ml.group(1))
