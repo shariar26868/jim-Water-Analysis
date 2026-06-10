@@ -6669,6 +6669,13 @@ class SaturationService:
         raw_material_data = req.get("raw_material_chemistry")
         product_data = req.get("product_blend") or req.get("product")
         user_dosage_ppm = float(req.get("dosage_ppm") or 2.0)
+        
+        logger.info(
+            f"_apply_dynamic_colors: user_dosage={user_dosage_ppm}, "
+            f"dataset_is=[{min_is:.4f}, {max_is:.4f}], "
+            f"has_raw_material_data={bool(raw_material_data)}, "
+            f"has_product_data={bool(product_data)}"
+        )
 
         # 2. Extract active formulas per salt based on input
         # Dictionary of salt_name -> (BreakpointSR, yellow_lower_cushion, yellow_upper_cushion)
@@ -6701,15 +6708,24 @@ class SaturationService:
                 app_is_min, app_is_max = self._parse_applicable_ionic_strength(app_is_str)
                 
                 # Check if dataset ionic strength OVERLAPS with this formula's applicable range
-                # (overlap = any part of dataset IS range falls within formula range)
-                # This is more permissive than strict containment — if dataset IS
-                # partially overlaps the formula range, the formula is applicable.
-                overlaps = (min_is <= app_is_max) and (max_is >= app_is_min)
-                if not overlaps:
+                # Special case: if dataset IS is 0 (not calculated), assume it's applicable
+                # This handles cases where ionic_strength isn't available but the formula should still apply
+                if min_is == 0 and max_is == 0:
+                    # Dataset IS not available; assume formula is applicable
+                    overlaps = True
                     logger.debug(
-                        f"Dataset IS range [{min_is:.4f}, {max_is:.4f}] does not overlap formula applicable range "
-                        f"[{app_is_min:.4f}, {app_is_max:.4f}] for {salt_to_inhibit} (formula: {app_is_str})"
+                        f"Dataset IS is 0 (not calculated); assuming formula for {salt_to_inhibit} is applicable"
                     )
+                else:
+                    # Check normal overlap: any part of dataset IS falls within formula range
+                    overlaps = (min_is <= app_is_max) and (max_is >= app_is_min)
+                    if not overlaps:
+                        logger.debug(
+                            f"Dataset IS range [{min_is:.4f}, {max_is:.4f}] does not overlap formula applicable range "
+                            f"[{app_is_min:.4f}, {app_is_max:.4f}] for {salt_to_inhibit} (formula: {app_is_str})"
+                        )
+
+                if not overlaps:
                     continue
 
                 formula_str = formula_obj.get("formulaForInhibitionPerformance", "")
@@ -6766,6 +6782,8 @@ class SaturationService:
             process_raw_material(raw_material_data, user_dosage_ppm)
 
         # 4. Apply colors to results
+        logger.info(f"Applying colors with {len(salt_breakpoints)} active salt breakpoints: {list(salt_breakpoints.keys())}")
+        
         for r in results:
             si_detail = r.get("saturation_indices", {})
             per_salt_colors = {}
@@ -6794,12 +6812,22 @@ class SaturationService:
                         c = "red"
                     else:
                         c = "yellow"
+                    
+                    logger.debug(
+                        f"{mineral_name}: SR={sr_val:.4f}, BreakpointSR={bp_sr:.4f}, "
+                        f"thresholds=[{green_thresh:.4f}, {red_thresh:.4f}] → {c.upper()}"
+                    )
                 else:
                     # BASE GRAPH COLOR logic: Green if SR < 1, else Red
+                    # Note: This fallback is used when no formula matched this mineral
                     if sr_val < 1:
                         c = "green"
                     else:
                         c = "red"
+                    
+                    logger.debug(
+                        f"{mineral_name}: No formula found (SR={sr_val:.4f}) → using default logic → {c.upper()}"
+                    )
                         
                 per_salt_colors[mineral_name] = c
 
