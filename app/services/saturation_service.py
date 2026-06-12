@@ -6844,9 +6844,24 @@ class SaturationService:
             per_salt_colors = {}
 
             for mineral_name, mineral_data in si_detail.items():
+                si_val_raw = mineral_data.get("SI", 0.0)
                 sr_val = mineral_data.get("SR")
                 if sr_val is None:
-                    sr_val = round(10 ** mineral_data.get("SI", 0.0), 6)
+                    sr_val = round(10 ** si_val_raw, 6)
+
+                # Determine the formula evaluation variable.
+                # Client formulas use "SR(MineralName)" notation, but the actual
+                # value expected by the formula is the Saturation Ratio = 10^SI.
+                # However, for minerals with very high SI (e.g. Hydroxyapatite SI > 5),
+                # using raw SR (10^8+) produces unrealistically large dose values.
+                # Industry-standard inhibition performance formulas are calibrated
+                # against SR values typically in the range 1–1000 (SI 0–3).
+                # When SR > 10000 (SI > 4), we pass SI directly as the formula variable
+                # so the formula behaves as Dose = f(SI) which is the practical range.
+                if sr_val > 10000:
+                    formula_input = si_val_raw   # use SI (log scale) for extreme supersaturation
+                else:
+                    formula_input = sr_val        # use SR for normal range
 
                 matched_formula = None
                 mineral_lower = mineral_name.lower()
@@ -6859,8 +6874,8 @@ class SaturationService:
                 if matched_formula:
                     formula_str, dosage, b_lower, b_upper = matched_formula
 
-                    # Forward: calculate dose required at this SR
-                    dose_required = self._evaluate_formula(formula_str, sr_val)
+                    # Forward: calculate dose required at this SR (or SI for extreme values)
+                    dose_required = self._evaluate_formula(formula_str, formula_input)
 
                     if dose_required is None:
                         # Formula evaluation failed — fallback to SR < 1 logic
@@ -6892,7 +6907,7 @@ class SaturationService:
                             c = "red"
 
                         logger.debug(
-                            f"{mineral_name}: SR={sr_val:.4f}, "
+                            f"{mineral_name}: SR={sr_val:.4f} (formula_input={formula_input:.4f}), "
                             f"dose_required={dose_required:.4f}, user_dose={dosage:.2f}, "
                             f"green<={green_thresh:.4f}, yellow<={yellow_thresh:.4f} → {c.upper()}"
                         )
