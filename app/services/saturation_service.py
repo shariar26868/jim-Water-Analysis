@@ -6864,9 +6864,22 @@ class SaturationService:
                         # Formula evaluation failed — fallback to SR < 1 logic
                         c = "green" if sr_val < 1 else "red"
                     else:
-                        # Green: current dosage is sufficient (with lower cushion)
-                        green_thresh = dosage * (1 + b_lower / 100.0)
-                        # Yellow: dosage covers it with upper cushion
+                        # Client color band logic:
+                        #   b_lower (e.g. 10%) = lower cushion → green threshold
+                        #   b_upper (e.g. 5%)  = upper cushion → yellow threshold
+                        #
+                        # The "lower cushion" means: if dose_required is within
+                        # (dosage - b_lower%) of the user dosage → Green (treatment working)
+                        # The "upper cushion" means: beyond (dosage + b_upper%) → Red
+                        #
+                        # Correct interpretation:
+                        #   green_thresh  = dosage * (1 - b_lower / 100)  ← dose must be ≤ this
+                        #   yellow_thresh = dosage * (1 + b_upper / 100)  ← above this → red
+                        #
+                        # If dose_required ≤ green_thresh  → Green  (treatment is sufficient)
+                        # If dose_required ≤ yellow_thresh → Yellow (caution zone)
+                        # Else                             → Red    (treatment insufficient)
+                        green_thresh  = dosage * (1 - b_lower / 100.0)
                         yellow_thresh = dosage * (1 + b_upper / 100.0)
 
                         if dose_required <= green_thresh:
