@@ -6526,6 +6526,9 @@ class SaturationService:
             f = re.sub(r'^(y|dose|d)\s*=\s*', '', f)
             f = re.sub(r'\bsr\s*\([^)]*\)', 'sr', f)
             f = f.replace('\u00d7', '*').replace('\u00b2', '^2').replace('\u00b3', '^3')
+            # Handle implicit multiply: digit immediately followed by 'x' or 'x(' → insert '*'
+            f = re.sub(r'(\d)x\s*\(', r'\1 * (', f)   # e.g. 1.0947x((  → 1.0947 * ((
+            f = re.sub(r'(\d)x(?=[\d\s])', r'\1 *', f) # e.g. 1.0947x 5 → 1.0947 * 5
             f = re.sub(r'(?<=[\d\w\)]) x (?=[\d\w\(sr])', ' * ', f)
             f = re.sub(r'\bx\b', 'sr', f)
             f = re.sub(r'\bsi\b', 'sr', f)
