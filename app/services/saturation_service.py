@@ -6828,6 +6828,8 @@ class SaturationService:
                 process_raw_material(raw_material_data, user_dosage_ppm)
         elif raw_material_data:
             # Case D: only raw_material_chemistry provided
+            # dosage_ppm here is the direct active ingredient dose —
+            # do NOT apply activePercentage (that applies only when dosing a product blend)
             process_raw_material(raw_material_data, user_dosage_ppm)
 
         # 4. Apply colors using FORWARD calculation:
