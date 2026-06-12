@@ -7350,17 +7350,18 @@ class SaturationService:
             )
 
         # Re-color for resolved salt
+        # Rebuild req from saved doc to re-apply dynamic colors
+        saved_req = {
+            "raw_material_chemistry": doc.get("raw_material_chemistry"),
+            "product_blend":          doc.get("product_blend"),
+            "product":                doc.get("product"),
+            "dosage_ppm":             doc.get("dosage_ppm", 2.0),
+        }
+        # Re-run dynamic color calculation with saved chemistry
+        results = self._apply_dynamic_colors(results, saved_req, resolved_salt)
         for r in results:
             si_info = r["saturation_indices"].get(resolved_salt)
-            if si_info is not None:
-                assigned_color = "green"
-                if "per_salt_colors" in r:
-                    for m_name, m_color in r["per_salt_colors"].items():
-                        if m_name.lower() == resolved_salt.lower():
-                            assigned_color = m_color
-                            break
-                r["color_code"] = assigned_color
-            else:
+            if si_info is None:
                 r["color_code"] = "error"
 
         # Determine requested salts from DB (saved salts_of_interest + current salt_id)
