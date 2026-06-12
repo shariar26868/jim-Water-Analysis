@@ -6906,10 +6906,12 @@ class SaturationService:
                         else:
                             c = "red"
 
-                        logger.debug(
-                            f"{mineral_name}: SR={sr_val:.4f} (formula_input={formula_input:.4f}), "
-                            f"dose_required={dose_required:.4f}, user_dose={dosage:.2f}, "
-                            f"green<={green_thresh:.4f}, yellow<={yellow_thresh:.4f} → {c.upper()}"
+                        logger.info(
+                            f"COLOR_CALC {mineral_name}: SR={sr_val:.4f} "
+                            f"formula_input={formula_input:.4f} "
+                            f"dose_req={dose_required:.4f} user_dose={dosage:.2f} "
+                            f"green_thresh={green_thresh:.4f} yellow_thresh={yellow_thresh:.4f} "
+                            f"→ {c.upper()}"
                         )
                 else:
                     # No formula — default: SR < 1 = green, else red
