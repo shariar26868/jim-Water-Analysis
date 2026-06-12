@@ -6506,6 +6506,68 @@ class SaturationService:
             per_coc.append(entry)
 
         return {"system": system, "per_coc": per_coc}
+    def _evaluate_formula(self, formula_str: str, sr_val: float) -> Optional[float]:
+        """
+        Evaluate inhibition formula at a given SR value.
+        Returns dose_required = f(SR), or None if parse fails.
+
+        Handles:
+          1. Power:     Dose = A × SR^B
+          2. Quadratic: Dose = A×SR^2 + B×SR + C
+          3. Linear:    Dose = A×SR + B
+        """
+        if not formula_str or sr_val is None:
+            return None
+        try:
+            import re
+            import math
+
+            f = formula_str.lower().strip()
+            f = re.sub(r'^(y|dose|d)\s*=\s*', '', f)
+            f = re.sub(r'\bsr\s*\([^)]*\)', 'sr', f)
+            f = f.replace('\u00d7', '*').replace('\u00b2', '^2').replace('\u00b3', '^3')
+            f = re.sub(r'(?<=[\d\w\)]) x (?=[\d\w\(sr])', ' * ', f)
+            f = re.sub(r'\bx\b', 'sr', f)
+            f = re.sub(r'\bsi\b', 'sr', f)
+            f = f.replace('(', ' ').replace(')', ' ')
+            f = re.sub(r'\bsr\s*\*\s*([\d.]+)', r'\1 * sr', f)
+            f = re.sub(r'\s+', ' ', f).strip()
+
+            # ── 1. Power: A * sr^B (non-integer exponent) ────────────────────
+            mp = re.search(r'([\d.]+)\s*\*?\s*sr\s*\^?\s*([\d.]+)', f)
+            if mp:
+                a = float(mp.group(1))
+                b = float(mp.group(2))
+                if b not in (1.0, 2.0) and a > 0 and b > 0:
+                    dose = a * (sr_val ** b)
+                    return round(dose, 6)
+
+            # ── 2. Quadratic: A * sr^2 + B * sr + C ──────────────────────────
+            mq = re.search(
+                r'([\d.]+)\s*\*?\s*sr\s*\^?\s*2\s*([+\-])\s*([\d.]+)\s*\*?\s*sr\s*([+\-])\s*([\d.]+)',
+                f
+            )
+            if mq:
+                a = float(mq.group(1))
+                b = float(mq.group(3)) * (1 if mq.group(2) == '+' else -1)
+                c = float(mq.group(5)) * (1 if mq.group(4) == '+' else -1)
+                dose = a * (sr_val ** 2) + b * sr_val + c
+                return round(dose, 6)
+
+            # ── 3. Linear: A * sr + B ─────────────────────────────────────────
+            ml = re.search(r'([\d.]+)\s*\*?\s*sr(?:\s*([+\-])\s*([\d.]+))?', f)
+            if ml:
+                a = float(ml.group(1))
+                b = 0.0
+                if ml.group(3):
+                    b = float(ml.group(3)) * (1 if ml.group(2) == '+' else -1)
+                dose = a * sr_val + b
+                return round(dose, 6)
+
+        except Exception as e:
+            logger.warning(f"_evaluate_formula failed for '{formula_str}' at SR={sr_val}: {e}")
+        return None
+
     def _solve_for_sr(self, formula_str: str, dosage_ppm: float) -> Optional[float]:
         """
         Solve inhibition formula for SR given a dosage value.
@@ -6678,8 +6740,10 @@ class SaturationService:
         )
 
         # 2. Extract active formulas per salt based on input
-        # Dictionary of salt_name -> (BreakpointSR, yellow_lower_cushion, yellow_upper_cushion)
-        salt_breakpoints: Dict[str, Tuple[float, float, float]] = {}
+        # Dictionary of salt_name -> (formula_str, dosage_ppm, band_lower_pct, band_upper_pct)
+        # We store the formula + dosage and evaluate forward (calc dose from actual SR)
+        # rather than solving inverse (which breaks for power formulas like A*SR^B)
+        salt_formulas: Dict[str, Tuple[str, float, float, float]] = {}
 
         def process_raw_material(rm_data, dosage):
             if not rm_data:
@@ -6703,26 +6767,19 @@ class SaturationService:
                 if not salt_to_inhibit:
                     continue
                 
-                # Parse Applicable Ionic Strength range (handles string format: "<0.1", "0.1-0.5", etc.)
+                # Parse Applicable Ionic Strength range
                 app_is_str = formula_obj.get("applicableIonicStrength", "")
                 app_is_min, app_is_max = self._parse_applicable_ionic_strength(app_is_str)
                 
-                # Check if dataset ionic strength OVERLAPS with this formula's applicable range
-                # Special case: if dataset IS is 0 (not calculated), assume it's applicable
-                # This handles cases where ionic_strength isn't available but the formula should still apply
+                # Check overlap
                 if min_is == 0 and max_is == 0:
-                    # Dataset IS not available; assume formula is applicable
                     overlaps = True
-                    logger.debug(
-                        f"Dataset IS is 0 (not calculated); assuming formula for {salt_to_inhibit} is applicable"
-                    )
                 else:
-                    # Check normal overlap: any part of dataset IS falls within formula range
                     overlaps = (min_is <= app_is_max) and (max_is >= app_is_min)
                     if not overlaps:
                         logger.debug(
-                            f"Dataset IS range [{min_is:.4f}, {max_is:.4f}] does not overlap formula applicable range "
-                            f"[{app_is_min:.4f}, {app_is_max:.4f}] for {salt_to_inhibit} (formula: {app_is_str})"
+                            f"IS range [{min_is:.4f}, {max_is:.4f}] does not overlap "
+                            f"[{app_is_min:.4f}, {app_is_max:.4f}] for {salt_to_inhibit}"
                         )
 
                 if not overlaps:
@@ -6730,23 +6787,15 @@ class SaturationService:
 
                 formula_str = formula_obj.get("formulaForInhibitionPerformance", "")
                 if not formula_str:
-                    logger.warning(f"Missing inhibition formula for salt '{salt_to_inhibit}'")
-                    continue
-                
-                breakpoint_sr = self._solve_for_sr(formula_str, dosage)
-                
-                if breakpoint_sr is None:
-                    logger.warning(f"Failed to solve SR formula for {salt_to_inhibit}: {formula_str}")
                     continue
                 
                 salt_lower = salt_to_inhibit.lower()
-                existing = salt_breakpoints.get(salt_lower)
-                # USE LOWEST BREAKPOINT for conservative safety as per client rules
-                if not existing or existing[0] > breakpoint_sr:
-                    salt_breakpoints[salt_lower] = (breakpoint_sr, band_lower_pct, band_upper_pct)
+                # Store formula + dosage (keep first match per salt)
+                if salt_lower not in salt_formulas:
+                    salt_formulas[salt_lower] = (formula_str, dosage, band_lower_pct, band_upper_pct)
                     logger.info(
-                        f"Assigned BreakpointSR={breakpoint_sr:.4f} for {salt_to_inhibit} at dose={dosage:.2f}ppm "
-                        f"(Ionic Strength: {app_is_str})"
+                        f"Stored formula for {salt_to_inhibit} at dose={dosage:.2f}ppm "
+                        f"(IS: {app_is_str}): {formula_str[:60]}..."
                     )
 
         # 3. Handle Product vs Raw Material Input
@@ -6781,54 +6830,61 @@ class SaturationService:
             # Case D: only raw_material_chemistry provided
             process_raw_material(raw_material_data, user_dosage_ppm)
 
-        # 4. Apply colors to results
-        logger.info(f"Applying colors with {len(salt_breakpoints)} active salt breakpoints: {list(salt_breakpoints.keys())}")
-        
+        # 4. Apply colors using FORWARD calculation:
+        #    Calculate dose_required = f(SR_actual) and compare with user dosage.
+        #    Green  → dose_required ≤ dosage × (1 + band_upper%)   [treatment sufficient]
+        #    Yellow → dosage × (1 + band_upper%) < dose_required ≤ dosage × (1 + 2×band_upper%)
+        #    Red    → dose_required > dosage × (1 + 2×band_upper%) [treatment insufficient]
+        logger.info(f"Applying colors with {len(salt_formulas)} active salt formulas: {list(salt_formulas.keys())}")
+
         for r in results:
             si_detail = r.get("saturation_indices", {})
             per_salt_colors = {}
+
             for mineral_name, mineral_data in si_detail.items():
                 sr_val = mineral_data.get("SR")
                 if sr_val is None:
                     sr_val = round(10 ** mineral_data.get("SI", 0.0), 6)
-                
-                matched_bp = None
+
+                matched_formula = None
                 mineral_lower = mineral_name.lower()
-                
-                for s_to_inh, bp_data in salt_breakpoints.items():
-                    # Case-insensitive substring match
+
+                for s_to_inh, formula_data in salt_formulas.items():
                     if s_to_inh in mineral_lower or mineral_lower in s_to_inh:
-                        matched_bp = bp_data
+                        matched_formula = formula_data
                         break
-                
-                if matched_bp:
-                    bp_sr, b_lower, b_upper = matched_bp
-                    green_thresh = bp_sr * (1 - b_lower / 100.0)
-                    red_thresh = bp_sr * (1 + b_upper / 100.0)
-                    
-                    if sr_val < green_thresh:
-                        c = "green"
-                    elif sr_val >= red_thresh:
-                        c = "red"
+
+                if matched_formula:
+                    formula_str, dosage, b_lower, b_upper = matched_formula
+
+                    # Forward: calculate dose required at this SR
+                    dose_required = self._evaluate_formula(formula_str, sr_val)
+
+                    if dose_required is None:
+                        # Formula evaluation failed — fallback to SR < 1 logic
+                        c = "green" if sr_val < 1 else "red"
                     else:
-                        c = "yellow"
-                    
-                    logger.debug(
-                        f"{mineral_name}: SR={sr_val:.4f}, BreakpointSR={bp_sr:.4f}, "
-                        f"thresholds=[{green_thresh:.4f}, {red_thresh:.4f}] → {c.upper()}"
-                    )
+                        # Green: current dosage is sufficient (with lower cushion)
+                        green_thresh = dosage * (1 + b_lower / 100.0)
+                        # Yellow: dosage covers it with upper cushion
+                        yellow_thresh = dosage * (1 + b_upper / 100.0)
+
+                        if dose_required <= green_thresh:
+                            c = "green"
+                        elif dose_required <= yellow_thresh:
+                            c = "yellow"
+                        else:
+                            c = "red"
+
+                        logger.debug(
+                            f"{mineral_name}: SR={sr_val:.4f}, "
+                            f"dose_required={dose_required:.4f}, user_dose={dosage:.2f}, "
+                            f"green<={green_thresh:.4f}, yellow<={yellow_thresh:.4f} → {c.upper()}"
+                        )
                 else:
-                    # BASE GRAPH COLOR logic: Green if SR < 1, else Red
-                    # Note: This fallback is used when no formula matched this mineral
-                    if sr_val < 1:
-                        c = "green"
-                    else:
-                        c = "red"
-                    
-                    logger.debug(
-                        f"{mineral_name}: No formula found (SR={sr_val:.4f}) → using default logic → {c.upper()}"
-                    )
-                        
+                    # No formula — default: SR < 1 = green, else red
+                    c = "green" if sr_val < 1 else "red"
+
                 per_salt_colors[mineral_name] = c
 
             r["per_salt_colors"] = per_salt_colors
@@ -7383,6 +7439,3 @@ class SaturationService:
 
 
 
-
-def shaikat():
-   pass
