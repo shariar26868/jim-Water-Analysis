@@ -6713,7 +6713,98 @@ class SaturationService:
             logger.warning(f"Could not parse applicableIonicStrength '{app_is_str}': {e}, defaulting to all ranges")
             return 0.0, 999.0
 
+    async def _enrich_product_blend_from_db(self, req: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        When product_blend.rawMaterials contains items with only rawId (no formula data),
+        fetch the full raw material documents from the DB and inject them as rawMaterialData.
+
+        Also handles the case where product_blend.productId is set but rawMaterials is empty —
+        fetches the full product from DB to get the rawMaterials list.
+
+        DB schema:
+          raw_materials collection:
+            { commonName, activePercentage, bandUpperCushion, bandLowerCushion,
+              formulas: [{ salToInhibit, applicableIonicStrength, formulaForInhibitionPerformance }] }
+
+          products collection:
+            { rawMaterials: [{ rawId, percentage, nameSnapshot }] }
+        """
+        product_data = req.get("product_blend")
+        if not product_data:
+            return req
+
+        # ── Step 1: If product_blend has a productId but no rawMaterials, fetch product from DB ──
+        product_id = product_data.get("productId")
+        raw_materials_list = product_data.get("rawMaterials")
+
+        if product_id and not raw_materials_list:
+            try:
+                from bson import ObjectId
+                prod_doc = await db.db["products"].find_one(
+                    {"_id": ObjectId(product_id)},
+                    {"_id": 0, "rawMaterials": 1, "waterPercentage": 1}
+                )
+                if prod_doc and prod_doc.get("rawMaterials"):
+                    raw_materials_list = prod_doc["rawMaterials"]
+                    product_data = dict(product_data)
+                    product_data["rawMaterials"] = raw_materials_list
+                    req = dict(req)
+                    req["product_blend"] = product_data
+                    logger.info(f"Fetched {len(raw_materials_list)} rawMaterials from productId={product_id}")
+            except Exception as e:
+                logger.warning(f"Could not fetch product from DB (productId={product_id}): {e}")
+
+        # ── Step 2: For each rawMaterial item without rawMaterialData, fetch from DB ──
+        if not isinstance(raw_materials_list, list) or not raw_materials_list:
+            return req
+
+        enriched_items = []
+        for rm_item in raw_materials_list:
+            # Already has rawMaterialData — nothing to do
+            if rm_item.get("rawMaterialData") or rm_item.get("rawMaterialChemistry"):
+                enriched_items.append(rm_item)
+                continue
+
+            raw_id = rm_item.get("rawId") or rm_item.get("rawMaterialId")
+            if not raw_id:
+                enriched_items.append(rm_item)
+                continue
+
+            try:
+                from bson import ObjectId
+                rm_doc = await db.db["raw_materials"].find_one(
+                    {"_id": ObjectId(raw_id)},
+                    {"_id": 0}
+                )
+                if rm_doc:
+                    # Normalise: DB uses 'formulas' key, code expects 'inhibitionFormulas'
+                    if "formulas" in rm_doc and "inhibitionFormulas" not in rm_doc:
+                        rm_doc["inhibitionFormulas"] = rm_doc["formulas"]
+
+                    enriched_item = dict(rm_item)
+                    enriched_item["rawMaterialData"] = rm_doc
+                    enriched_items.append(enriched_item)
+                    logger.info(
+                        f"Enriched rawMaterial rawId={raw_id} "
+                        f"({rm_doc.get('commonName')}) with "
+                        f"{len(rm_doc.get('inhibitionFormulas') or [])} formulas"
+                    )
+                else:
+                    logger.warning(f"Raw material not found in DB: rawId={raw_id}")
+                    enriched_items.append(rm_item)
+            except Exception as e:
+                logger.warning(f"Could not fetch rawMaterial rawId={raw_id}: {e}")
+                enriched_items.append(rm_item)
+
+        # Update req with enriched rawMaterials
+        product_data = dict(product_data)
+        product_data["rawMaterials"] = enriched_items
+        req = dict(req)
+        req["product_blend"] = product_data
+        return req
+
     def _apply_dynamic_colors(
+
         self,
         results: List[Dict[str, Any]],
         req: Dict[str, Any],
@@ -6764,7 +6855,8 @@ class SaturationService:
             band_lower_pct = _to_float(rm_data.get("bandLowerCushion"), 5.0)
             band_upper_pct = _to_float(rm_data.get("bandUpperCushion"), 5.0)
 
-            formulas = rm_data.get("inhibitionFormulas") or []
+            # DB stores formulas under 'formulas' key; payload may use 'inhibitionFormulas'
+            formulas = rm_data.get("inhibitionFormulas") or rm_data.get("formulas") or []
             for formula_obj in formulas:
                 salt_to_inhibit = formula_obj.get("salToInhibit", "")
                 if not salt_to_inhibit:
@@ -6814,7 +6906,12 @@ class SaturationService:
                     rm_chem = rm_item.get("rawMaterialData") or rm_item.get("rawMaterialChemistry")
                     if not rm_chem:
                         continue
-                    pct_in_prod = float(rm_item.get("percentageInProduct", 100.0)) / 100.0
+                    # DB uses 'percentage', payload may use 'percentageInProduct'
+                    pct_in_prod = float(
+                        rm_item.get("percentageInProduct")
+                        or rm_item.get("percentage")
+                        or 100.0
+                    ) / 100.0
                     active_pct = float(rm_chem.get("activePercentage", 100.0)) / 100.0
                     rm_dosage = user_dosage_ppm * pct_in_prod * active_pct
                     process_raw_material(rm_chem, rm_dosage)
@@ -7113,7 +7210,12 @@ class SaturationService:
             balance_anion     = balance_anion,
         )
 
-        # ── 10.5 Apply Dynamic Colors based on Dataset IS and SR thresholds ──
+        # ── 10.5 Enrich product_blend with raw material chemistry from DB ────
+        # When product_blend.rawMaterials contains only rawId (no formula data),
+        # fetch the full raw material documents from DB and inject them.
+        req = await self._enrich_product_blend_from_db(req)
+
+        # ── 10.6 Apply Dynamic Colors based on Dataset IS and SR thresholds ──
         results = self._apply_dynamic_colors(results, req, salt_id)
 
         # ── 11. Add additional calculations per grid point ────────────────────
@@ -7363,6 +7465,8 @@ class SaturationService:
             "dosage_ppm":             doc.get("dosage_ppm", 2.0),
         }
         # Re-run dynamic color calculation with saved chemistry
+        # Enrich product_blend with raw material data from DB (if needed)
+        saved_req = await self._enrich_product_blend_from_db(saved_req)
         results = self._apply_dynamic_colors(results, saved_req, resolved_salt)
         for r in results:
             si_info = r["saturation_indices"].get(resolved_salt)
