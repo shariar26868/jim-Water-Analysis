@@ -184,10 +184,11 @@ def _apply_dynamic_colors(
             if sr_val is None:
                 sr_val = round(10 ** si_val_raw, 6)
 
-            if sr_val > 10000:
-                formula_input = si_val_raw
-            else:
-                formula_input = sr_val
+            # if sr_val > 10000:
+            #     formula_input = si_val_raw
+            # else:
+            #     formula_input = sr_val
+            formula_input = sr_val
 
             matched_formula = None
             mineral_lower = mineral_name.lower()
