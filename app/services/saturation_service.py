@@ -632,6 +632,28 @@ def _to_celsius(value: float, unit: str) -> float:
     return round(value, 2)
 
 
+def _robust_safe_float(val: Any, default: float = 0.0) -> float:
+    """
+    Robust float conversion helper.
+    Cleans up common unit suffixes, commas, and percentage signs.
+    """
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return float(val)
+    try:
+        clean_val = str(val).strip().replace("%", "")
+        # Remove commas
+        clean_val = clean_val.replace(",", "")
+        # Extract first space-separated token (handles "1000 GPM" or "120 F")
+        tokens = clean_val.split()
+        if tokens:
+            clean_val = tokens[0]
+        return float(clean_val)
+    except (TypeError, ValueError, IndexError):
+        return default
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CYCLED WATER PARAMETERS BUILDER
 # Builds the concentrated water chemistry table for a specific CoC × Temp point.
@@ -1492,15 +1514,15 @@ class SaturationService:
             dosage_ppm = 2.0
         temp_unit        = req.get("temp_unit", "C")
 
-        recirc_rate_gpm  = float(asset_info.get("recirculationRate") or 0)
-        hot_temp_f       = float(asset_info.get("hotWaterTempF") or 0)
-        cold_temp_f      = float(asset_info.get("coldWaterTempF") or 0)
-        wet_bulb_f       = float(asset_info.get("wetBulbTempF") or 0)
-        drift_pct        = float(asset_info.get("driftPercent") or 0.1)
-        evap_factor      = float(asset_info.get("evaporationFactorPercent") or 85.0)
+        recirc_rate_gpm  = _robust_safe_float(asset_info.get("recirculationRate"), 0.0)
+        hot_temp_f       = _robust_safe_float(asset_info.get("hotWaterTempF"), 0.0)
+        cold_temp_f      = _robust_safe_float(asset_info.get("coldWaterTempF"), 0.0)
+        wet_bulb_f       = _robust_safe_float(asset_info.get("wetBulbTempF"), 0.0)
+        drift_pct        = _robust_safe_float(asset_info.get("driftPercent"), 0.1)
+        evap_factor      = _robust_safe_float(asset_info.get("evaporationFactorPercent"), 85.0)
         metallurgy       = asset_info.get("systemMetallurgy") or []
 
-        product_cost_per_lb = float(product_blend.get("costPerLb") or 0)
+        product_cost_per_lb = _robust_safe_float(product_blend.get("costPerLb"), 0.0)
         # Product name: prefer product_blend.productName, fallback to raw_material commonName
         product_name = (
             product_blend.get("productName")
@@ -2498,10 +2520,7 @@ class SaturationService:
         System-level metrics calculated once; per-CoC metrics per CoC value.
         """
         def _safe_float(val: Any, default: float = 0.0) -> float:
-            try:
-                return float(val) if val is not None else default
-            except (TypeError, ValueError):
-                return default
+            return _robust_safe_float(val, default)
 
         def _to_f(val: Any, unit: str) -> Optional[float]:
             """Convert any temperature to °F."""
@@ -3076,7 +3095,7 @@ class SaturationService:
 
         raw_material_data = req.get("raw_material_chemistry")
         product_data = req.get("product_blend") or req.get("product")
-        user_dosage_ppm = float(req.get("dosage_ppm") or 2.0)
+        user_dosage_ppm = _robust_safe_float(req.get("dosage_ppm"), 2.0)
         
         logger.info(
             f"_apply_dynamic_colors: user_dosage={user_dosage_ppm}, "
@@ -3155,22 +3174,24 @@ class SaturationService:
             if isinstance(product_data.get("rawMaterials"), list) and product_data["rawMaterials"]:
                 # Case A: blended product
                 for rm_item in product_data["rawMaterials"]:
-                    rm_chem = rm_item.get("rawMaterialData") or rm_item.get("rawMaterialChemistry")
+                    # Robust fallback to rm_item itself if nested rawMaterialData is missing
+                    rm_chem = rm_item.get("rawMaterialData") or rm_item.get("rawMaterialChemistry") or rm_item
                     if not rm_chem:
                         continue
                     # DB uses 'percentage', payload may use 'percentageInProduct'
-                    pct_in_prod = float(
+                    pct_in_prod = _robust_safe_float(
                         rm_item.get("percentageInProduct")
                         or rm_item.get("percentage")
-                        or 100.0
+                        or 100.0,
+                        100.0
                     ) / 100.0
-                    active_pct = float(rm_chem.get("activePercentage", 100.0)) / 100.0
+                    active_pct = _robust_safe_float(rm_chem.get("activePercentage"), 100.0) / 100.0
                     rm_dosage = user_dosage_ppm * pct_in_prod * active_pct
                     process_raw_material(rm_chem, rm_dosage)
             elif product_data.get("rawMaterialChemistry"):
                 # Case B: single raw material embedded
                 rm_chem = product_data["rawMaterialChemistry"]
-                active_pct = float(rm_chem.get("activePercentage", 100.0)) / 100.0
+                active_pct = _robust_safe_float(rm_chem.get("activePercentage"), 100.0) / 100.0
                 process_raw_material(rm_chem, user_dosage_ppm * active_pct)
             elif product_data.get("inhibitionFormulas"):
                 # Case C: product_blend itself has inhibitionFormulas
@@ -3333,7 +3354,7 @@ class SaturationService:
         # the entire PHREEQC pipeline finishes so we can determine the dataset's
         # min and max ionic strength.
         thresholds = {}
-        dosage_ppm = float(req.get("dosage_ppm") or 2.0)
+        dosage_ppm = _robust_safe_float(req.get("dosage_ppm"), 2.0)
 
         # ── 5. Resolve temperatures ───────────────────────────────────────────
         asset_info = req.get("asset_info") or {}
@@ -3358,11 +3379,11 @@ class SaturationService:
 
         cold_temp_raw  = asset_info.get("supplyTemperature") or req.get("temp_min") or 32.2
         cold_temp_unit = asset_info.get("supplyTemperatureType") or req.get("temp_unit") or "°F"
-        cold_temp_c    = _to_celsius(float(cold_temp_raw), cold_temp_unit)
+        cold_temp_c    = _to_celsius(_robust_safe_float(cold_temp_raw, 32.2), cold_temp_unit)
 
         hot_temp_raw   = asset_info.get("returnTemperature") or req.get("temp_max") or 55.0
         hot_temp_unit  = asset_info.get("returnTemperatureType") or req.get("temp_unit") or "°F"
-        hot_temp_c     = _to_celsius(float(hot_temp_raw), hot_temp_unit)
+        hot_temp_c     = _to_celsius(_robust_safe_float(hot_temp_raw, 55.0), hot_temp_unit)
 
         if hot_temp_c < cold_temp_c:
             logger.warning(
@@ -3381,7 +3402,7 @@ class SaturationService:
             tower_type     = asset_info.get("towerType"),
             fill_type      = asset_info.get("fillType"),
             draft_type     = asset_info.get("draftType"),
-            approach_to_wb = float(approach_to_wb),
+            approach_to_wb = _robust_safe_float(approach_to_wb, 7.0),
             co2_override   = co2_factor_override,
         )
 
@@ -3401,17 +3422,17 @@ class SaturationService:
         logger.info(f"Charge balance: cation={balance_cation}, anion={balance_anion}")
 
         # ── 8. Build CoC list ─────────────────────────────────────────────────
-        coc_min      = float(req.get("coc_min") or 1.0)
-        coc_max      = float(req.get("coc_max") or 10.0)
-        coc_interval = float(req.get("coc_interval") or 1.0)
+        coc_min      = _robust_safe_float(req.get("coc_min"), 1.0)
+        coc_max      = _robust_safe_float(req.get("coc_max"), 10.0)
+        coc_interval = _robust_safe_float(req.get("coc_interval"), 1.0)
         coc_list     = self._build_coc_list(coc_min, coc_max, coc_interval)
         logger.info(f"CoC list: {coc_list}")
 
         # ── 9. Build evaluation temperature list ──────────────────────────────
         temp_unit     = req.get("temp_unit", "F")
-        temp_min_raw  = float(req.get("temp_min") or 110.0)
-        temp_max_raw  = float(req.get("temp_max") or 160.0)
-        temp_interval = float(req.get("temp_interval") or 10.0)
+        temp_min_raw  = _robust_safe_float(req.get("temp_min"), 110.0)
+        temp_max_raw  = _robust_safe_float(req.get("temp_max"), 160.0)
+        temp_interval = _robust_safe_float(req.get("temp_interval"), 10.0)
 
         temp_list_c:   List[float] = []  # Celsius — for PHREEQC internal use
         temp_list_raw: List[float] = []  # Original user input — for _grid_temp display
@@ -3423,7 +3444,7 @@ class SaturationService:
 
         if not temp_list_c:
             temp_list_c   = [hot_temp_c]
-            temp_list_raw = [round(float(req.get("temp_min") or 110.0), 2)]
+            temp_list_raw = [round(_robust_safe_float(req.get("temp_min"), 110.0), 2)]
 
         logger.info(f"Eval temp list (°C): {temp_list_c}")
         logger.info(f"Eval temp list (raw user unit): {temp_list_raw}")
@@ -3445,7 +3466,7 @@ class SaturationService:
                 **mapped,
                 # Pass wet bulb temp for per-CoC DO calculation
                 "_wet_bulb_temp_c": (
-                    round((float(asset_info.get("wetBulbTempF")) - 32) * 5 / 9, 2)
+                    round((_robust_safe_float(asset_info.get("wetBulbTempF")) - 32) * 5 / 9, 2)
                     if asset_info.get("wetBulbTempF") is not None
                     else None
                 ),
@@ -3475,7 +3496,7 @@ class SaturationService:
             cooling_tower_analysis = await self._calculate_cooling_tower_analysis(
                 asset_info   = asset_info,
                 coc_list     = coc_list,
-                dosage_ppm   = float(req.get("dosage_ppm") or 2.0),
+                dosage_ppm   = _robust_safe_float(req.get("dosage_ppm"), 2.0),
                 product_blend= req.get("product_blend"),
                 mapped_params= mapped,
                 grid_results = results,
@@ -3576,7 +3597,7 @@ class SaturationService:
             "run_id":                  run_id,
             "salt_id":                 effective_salt,
             "salts_of_interest":       salts_of_interest,
-            "dosage_ppm":              float(req.get("dosage_ppm") or 2.0),
+            "dosage_ppm":              _robust_safe_float(req.get("dosage_ppm"), 2.0),
             "coc_min":                 coc_min,
             "coc_max":                 coc_max,
             "coc_interval":            coc_interval,
