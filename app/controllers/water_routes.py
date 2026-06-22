@@ -2065,9 +2065,9 @@ async def run_saturation_analysis(raw_body: Dict[str, Any] = Body(...)):
         if not req.get("base_water_parameters"):
             water_report_id = raw_body.get("waterReportId") or raw_body.get("water_report_id")
             if water_report_id:
-                # Try to fetch from water_reports collection
-                report = await db.db["water_reports"].find_one(
-                    {"reportId": water_report_id},
+                # Try to fetch from water_ai_reports collection
+                report = await db.db["water_ai_reports"].find_one(
+                    {"report_id": water_report_id},
                     {"_id": 0, "parameters": 1, "waterParameters": 1, "base_water_parameters": 1}
                 )
                 if report:
