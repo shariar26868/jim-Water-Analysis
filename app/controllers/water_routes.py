@@ -2011,12 +2011,17 @@ def _normalize_saturation_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     treatment = raw.get("treatment") or {}
     if treatment and "product_blend" not in result:
         result["product_blend"] = {
-            "productId": treatment.get("productId"),
-            "dosage":    treatment.get("dosage"),
+            "productId":    treatment.get("productId"),
+            "dosage":       treatment.get("dosage"),
+            "rawMaterials": treatment.get("rawMaterials"),
         }
         # dosage_ppm from treatment if not in inputConfig
-        if "dosage_ppm" not in result and treatment.get("dosage"):
-            result["dosage_ppm"] = float(treatment["dosage"])
+        if "dosage_ppm" not in result and treatment.get("dosage") is not None:
+            _dosage_val = treatment["dosage"]
+            try:
+                result["dosage_ppm"] = float(str(_dosage_val).replace("ppm","").replace("PPM","").strip().split()[0])
+            except (ValueError, TypeError, IndexError):
+                result["dosage_ppm"] = 2.0
 
     # raw_material_chemistry — may be at top level
     if "raw_material_chemistry" not in result:
