@@ -3031,9 +3031,37 @@ class SaturationService:
 
         enriched_items = []
         for rm_item in raw_materials_list:
-            # Already has rawMaterialData — nothing to do
+            # Already has rawMaterialData or rawMaterialChemistry — nothing to do
             if rm_item.get("rawMaterialData") or rm_item.get("rawMaterialChemistry"):
                 enriched_items.append(rm_item)
+                continue
+
+            # ── FIX: If the payload already carries inhibitionFormulas directly on the
+            # rm_item (as happens with PRODUCT blend payloads), do NOT fetch from DB.
+            # Fetching from DB could overwrite the payload formulas with stale/empty
+            # DB data, causing 'undefined' errors in the analysis pipeline.
+            # Instead, wrap the rm_item itself as rawMaterialData so downstream code
+            # (process_raw_material) can find inhibitionFormulas, activePercentage, etc.
+            if rm_item.get("inhibitionFormulas"):
+                enriched_item = dict(rm_item)
+                # Build rawMaterialData from the payload fields already on rm_item
+                rm_data_from_payload = {
+                    "commonName":            rm_item.get("nameSnapshot") or rm_item.get("activeComponentName", ""),
+                    "activeComponentName":   rm_item.get("activeComponentName", ""),
+                    "activePercentage":      rm_item.get("activePercentage"),
+                    "activePercentageChemicalFormula": rm_item.get("activePercentageChemicalFormula", ""),
+                    "inhibitionFormulas":    rm_item.get("inhibitionFormulas", []),
+                    # Cushions default to 5%/10% — these are rarely in the payload
+                    "bandUpperCushion":      rm_item.get("bandUpperCushion", "5%"),
+                    "bandLowerCushion":      rm_item.get("bandLowerCushion", "10%"),
+                }
+                enriched_item["rawMaterialData"] = rm_data_from_payload
+                enriched_items.append(enriched_item)
+                logger.info(
+                    f"rawMaterial '{rm_item.get('nameSnapshot')}' has inhibitionFormulas "
+                    f"directly in payload — skipping DB fetch, using payload data directly. "
+                    f"Formulas count: {len(rm_item.get('inhibitionFormulas', []))}"
+                )
                 continue
 
             raw_id = rm_item.get("rawId") or rm_item.get("rawMaterialId")
@@ -3052,6 +3080,20 @@ class SaturationService:
                     if "formulas" in rm_doc and "inhibitionFormulas" not in rm_doc:
                         rm_doc["inhibitionFormulas"] = rm_doc["formulas"]
 
+                    # ── FIX: If the payload rm_item has inhibitionFormulas, always prefer
+                    # them over the DB version — payload is the authoritative source.
+                    payload_formulas = rm_item.get("inhibitionFormulas")
+                    if payload_formulas:
+                        rm_doc["inhibitionFormulas"] = payload_formulas
+                        logger.info(
+                            f"rawMaterial rawId={raw_id}: payload inhibitionFormulas "
+                            f"({len(payload_formulas)}) preferred over DB formulas."
+                        )
+
+                    # Merge payload-level activePercentage into rm_doc if missing in DB
+                    if rm_item.get("activePercentage") and not rm_doc.get("activePercentage"):
+                        rm_doc["activePercentage"] = rm_item["activePercentage"]
+
                     enriched_item = dict(rm_item)
                     enriched_item["rawMaterialData"] = rm_doc
                     enriched_items.append(enriched_item)
@@ -3062,6 +3104,8 @@ class SaturationService:
                     )
                 else:
                     logger.warning(f"Raw material not found in DB: rawId={raw_id}")
+                    # ── FIX: Even when DB lookup fails, preserve the rm_item as-is
+                    # so any inhibitionFormulas on the payload item are not lost.
                     enriched_items.append(rm_item)
             except Exception as e:
                 logger.warning(f"Could not fetch rawMaterial rawId={raw_id}: {e}")
